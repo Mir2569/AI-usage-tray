@@ -17,6 +17,8 @@ if errorlevel 1 (
 )
 %PY% --version
 if errorlevel 1 goto NOPYTHON
+%PY% -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)"
+if errorlevel 1 goto OLDPYTHON
 echo.
 
 echo [2/4] Creating isolated build venv (.venv312)...
@@ -25,9 +27,10 @@ if errorlevel 1 goto PIPFAIL
 set "VPY=.venv312\Scripts\python.exe"
 echo.
 
-echo [3/4] Installing build dependencies...
-"%VPY%" -m pip install --upgrade pip
-"%VPY%" -m pip install -r requirements.txt pyinstaller
+echo [3/4] Installing build dependencies (pinned for reproducible builds)...
+"%VPY%" -m pip install -r requirements-build.txt
+if errorlevel 1 goto PIPFAIL
+"%VPY%" -m pip install -r requirements.txt
 if errorlevel 1 goto PIPFAIL
 echo.
 
@@ -52,6 +55,12 @@ goto END
 
 :NOPYTHON
 echo   [!] Python not found. Install from python.org and add to PATH.
+pause
+goto END
+
+:OLDPYTHON
+echo   [!] Python 3.10+ is required (pinned build deps in requirements-build.txt).
+echo   [!] Install Python 3.12:  winget install -e --id Python.Python.3.12
 pause
 goto END
 
