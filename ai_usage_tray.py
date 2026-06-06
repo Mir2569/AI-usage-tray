@@ -327,7 +327,7 @@ def resolve_cmd(name, explicit=""):
     sep = ";" if os.name == "nt" else ":"
     for folder in path_env.split(sep):
         folder = folder.strip('"')
-        if not folder:
+        if not folder or not os.path.isabs(folder):
             continue
         for ext in exts:
             p = os.path.join(folder, name + ext)
