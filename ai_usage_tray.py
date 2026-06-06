@@ -826,7 +826,7 @@ def run_tray(cfg):
 
     state = {"results": [], "lock": threading.Lock(),
              "remaining": None, "theme": _windows_is_light_theme(),
-             "fetching": False}
+             "fetching": False, "pending": False}
 
     def show_settings(icon):
         def run_launcher():
@@ -905,23 +905,40 @@ def run_tray(cfg):
 
     def do_refresh(icon=None):
         # 取得処理は重い(API通信/サブプロセス)。必ず UI スレッド外で実行すること。
-        # 単一フライト: 既に取得中なら二重に collect しない。
+        # 単一フライト + pending: 取得中に来た更新要求は取りこぼさず、完了後にもう一度
+        # 取得する。これにより設定保存直後の再取得が「実行中の(古い設定での)取得」に
+        # 飲み込まれて反映されない問題を防ぐ。
         with state["lock"]:
             if state["fetching"]:
+                state["pending"] = True   # 取得中の要求は完了後に消化
                 return
             state["fetching"] = True
+            state["pending"] = False
         _apply_ui(icon)            # 「取得中」を即時表示
         try:
-            results = collect(cfg)
-            rem = min_remaining(results)
-            with state["lock"]:
-                state["results"] = results
-                state["remaining"] = rem
-                state["theme"] = _windows_is_light_theme()
-        finally:
+            while True:
+                results = collect(cfg)
+                rem = min_remaining(results)
+                with state["lock"]:
+                    state["results"] = results
+                    state["remaining"] = rem
+                    state["theme"] = _windows_is_light_theme()
+                    # 停止判定とフラグ解除を同一ロック内で原子的に行い、取りこぼしを防ぐ。
+                    if state["pending"]:
+                        state["pending"] = False
+                        again = True
+                    else:
+                        state["fetching"] = False
+                        again = False
+                _apply_ui(icon)    # 結果(取得継続中なら中間結果)を反映
+                if not again:
+                    break
+        except BaseException:
             with state["lock"]:
                 state["fetching"] = False
-        _apply_ui(icon)            # 結果を反映
+                state["pending"] = False
+            _apply_ui(icon)
+            raise
 
     def build_tooltip(results):
         with state["lock"]:
