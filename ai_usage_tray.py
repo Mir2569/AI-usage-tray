@@ -59,6 +59,12 @@ DEFAULT_CONFIG = {
     "enabled": {"claude": True, "codex": True, "antigravity": True},
     # Antigravity のオートコンプリート専用モデルも表示するか(既定は非表示)
     "antigravity_show_autocomplete": False,
+    # antigravity-usage が未検出のとき npx 経由で取得するか(既定は無効=opt-in)。
+    # 有効にすると常駐アプリがバックグラウンドで npm からパッケージを取得・実行する。
+    "antigravity_npx_fallback": False,
+    # npx フォールバック時に使う antigravity-usage の固定バージョン。
+    # 空文字にすると無印(最新)になるが、サプライチェーンの観点から非推奨。
+    "antigravity_usage_version": "0.2.9",
     # コマンドの明示パス(自動検出に失敗する場合のみ設定)
     "paths": {"antigravity_usage": ""},
 }
@@ -597,18 +603,31 @@ def _walk_find_models(obj, found, parent_key=None):
             _walk_find_models(v, found, parent_key=parent_key)
 
 
+def build_antigravity_cmd(cfg):
+    """antigravity-usage 実行コマンドを決める。返り値は (cmd or None, reason)。
+    cmd が None のとき reason に理由(ユーザー向けメッセージ)を入れる。"""
+    exe = resolve_cmd("antigravity-usage", cfg["paths"].get("antigravity_usage", ""))
+    if exe:
+        return [exe, "--json"], None
+    # ローカルに見つからない場合の npx フォールバック。常駐アプリが裏で npm から
+    # コードを取得・実行することになるため、既定では無効(opt-in)。
+    if not cfg.get("antigravity_npx_fallback", False):
+        return None, ("antigravity-usage が見つかりません。`npm i -g antigravity-usage` で導入するか、"
+                      "設定で antigravity_npx_fallback を有効化してください。")
+    npx = resolve_cmd("npx")
+    if not npx:
+        return None, "antigravity-usage も npx も見つかりません。`npm i -g antigravity-usage` を実行してください。"
+    # 版固定でサプライチェーンリスクを抑える(空なら無印=最新だが非推奨)。
+    version = str(cfg.get("antigravity_usage_version", "") or "").strip()
+    pkg = f"antigravity-usage@{version}" if version else "antigravity-usage"
+    return [npx, "-y", pkg, "--json"], None
+
+
 def provider_antigravity(cfg):
     res = {"name": "Antigravity", "ok": False, "error": None, "windows": [], "note": ""}
-    exe = resolve_cmd("antigravity-usage", cfg["paths"].get("antigravity_usage", ""))
-    cmd = None
-    if exe:
-        cmd = [exe, "--json"]
-    else:
-        npx = resolve_cmd("npx")
-        if npx:
-            cmd = [npx, "-y", "antigravity-usage", "--json"]
+    cmd, reason = build_antigravity_cmd(cfg)
     if not cmd:
-        res["error"] = "antigravity-usage が見つかりません。`npm i -g antigravity-usage` を実行してください。"
+        res["error"] = reason
         return res
 
     rc, out, err = run_cmd(cmd, timeout=60)
@@ -1090,12 +1109,12 @@ def run_probe(cfg):
     print()
 
     # antigravity-usage 生出力
-    exe = resolve_cmd("antigravity-usage", cfg["paths"].get("antigravity_usage", ""))
-    cmd = [exe, "--json"] if exe else None
-    if not cmd:
-        npx = resolve_cmd("npx")
-        cmd = [npx, "-y", "antigravity-usage", "--json"] if npx else None
+    cmd, reason = build_antigravity_cmd(cfg)
+    print(f"[Antigravity] npx_fallback: {bool(cfg.get('antigravity_npx_fallback', False))}"
+          f"  version: {cfg.get('antigravity_usage_version', '')!r}")
     print(f"[Antigravity] cmd: {mask_path(cmd)}")
+    if not cmd:
+        print(f"[Antigravity] スキップ: {reason}")
     if cmd:
         rc, out, err = run_cmd(cmd, timeout=60)
         print(f"[Antigravity] rc={rc}  stderr={err.strip()[:200]}")
