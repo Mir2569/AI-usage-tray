@@ -52,12 +52,21 @@ def mask_path(path):
     return s
 
 
-# 機密と思しき dict キー(値を伏せる対象)。
-_SECRET_KEY_RE = re.compile(
-    r"(access_?token|refresh_?token|id_?token|api[_-]?key|secret|password|passwd|"
-    r"authorization|bearer|cookie|credential|\btoken\b|\bemail\b)",
-    re.IGNORECASE,
+# 機密と思しきキー名(値を伏せる対象)。dict / 文字列の両方の秘匿で共用する。
+_SECRET_KEYS = (
+    r"access_?token|refresh_?token|id_?token|api[_-]?key|secret|password|passwd|"
+    r"authorization|bearer|cookie|credential|token|email"
 )
+_SECRET_KEY_RE = re.compile(r"(" + _SECRET_KEYS + r")", re.IGNORECASE)
+
+# 文字列(JSON 化できない生出力)向け: "key": "値" / key=値 / クォート無し値 を *** にする。
+_SECRET_TEXT_QUOTED_RE = re.compile(
+    r'("(?:' + _SECRET_KEYS + r')"\s*:\s*")[^"]*(")', re.IGNORECASE)
+# key の後ろは "Bearer <token>" のように値が複数語になり得るので、区切り(改行/カンマ等)
+# まで丸ごと伏せて取りこぼしを防ぐ。
+_SECRET_TEXT_BARE_RE = re.compile(
+    r'((?:' + _SECRET_KEYS + r')\s*[:=]\s*)([^\r\n,;}]+)', re.IGNORECASE)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
 def redact_secrets(obj):
@@ -73,6 +82,17 @@ def redact_secrets(obj):
     if isinstance(obj, list):
         return [redact_secrets(v) for v in obj]
     return obj
+
+
+def redact_text(s):
+    """JSON 化できない生文字列向けの秘匿。機密キーの値や素のメールアドレスを *** にする。
+    壊れた JSON や警告ログ混じりの出力でもトークン/メール等が漏れないようにする。"""
+    if not s:
+        return s
+    s = _SECRET_TEXT_QUOTED_RE.sub(r"\1***\2", s)
+    s = _SECRET_TEXT_BARE_RE.sub(r"\1***", s)
+    s = _EMAIL_RE.sub("***@***", s)
+    return s
 
 # PyInstaller などで exe 化(凍結)された場合は exe のあるフォルダを基準にする
 if getattr(sys, "frozen", False):
@@ -1154,13 +1174,14 @@ def run_probe(cfg, show_raw=False):
         rc, out, err = run_cmd(cmd, timeout=60)
         print(f"[Antigravity] rc={rc}")
         if show_raw:
-            print(f"[Antigravity] stderr: {mask_path(err.strip()[:200])}")
-            # JSON なら再帰 redact、無理なら mask_path のみ通して表示
+            print(f"[Antigravity] stderr: {mask_path(redact_text(err.strip()[:200]))}")
+            # JSON なら再帰 redact、壊れた JSON 等は文字列向け redact を通す
+            # (どちらの経路でも秘匿してから mask_path で表示する)。
             raw = out.strip()
             try:
                 shown = json.dumps(redact_secrets(json.loads(raw)), ensure_ascii=False)
             except Exception:
-                shown = raw
+                shown = redact_text(raw)
             print(f"[Antigravity] stdout(redacted, 先頭1500): {mask_path(shown[:1500])}")
         else:
             print("[Antigravity] raw 出力は非表示(--probe-raw で表示)。値は下の正規化結果を参照。")
