@@ -1143,14 +1143,23 @@ def run_tray(cfg):
 
     def worker():
         while True:
-            deferred = False
             try:
-                # do_refresh が False を返すのは手動更新と競合してこの回を繰り延べたとき。
-                # その場合は通常間隔を待たず短時間で再試行し、定期更新の取りこぼしを防ぐ。
-                deferred = do_refresh(icon) is False
+                # do_refresh が False を返すのは手動更新/設定保存の取得と競合して
+                # この回を繰り延べたとき。固定間隔で再試行すると、取得が長い環境
+                # (Claude の version 取得や Antigravity CLI は最大 15〜60 秒待つ) では
+                # fetching 中に何度も pending を立て直し、取得が止まらず API/CLI を
+                # 連続実行するループになり得る。実行中の取得が完了するのを待ってから
+                # 一度だけ取得し直し、定期更新を確実に1回行う。
+                if do_refresh(icon) is False:
+                    for _ in range(120):       # 完了待ちの安全上限(秒)
+                        time.sleep(1)
+                        with state["lock"]:
+                            if not state["fetching"]:
+                                break
+                    do_refresh(icon)
             except Exception as e:
                 print(f"[worker] {e}", file=sys.stderr)
-            time.sleep(5 if deferred else max(30, int(cfg.get("refresh_seconds", 300))))
+            time.sleep(max(30, int(cfg.get("refresh_seconds", 300))))
 
     def theme_watcher():
         # システムテーマ(ライト/ダーク)を短い間隔で監視し、変化したら
