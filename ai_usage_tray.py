@@ -947,7 +947,8 @@ def run_tray(cfg):
                     if changed:
                         state["theme"] = theme
                 if changed:
-                    icon.icon = make_icon_image(rem)
+                    with ui_lock:
+                        icon.icon = make_icon_image(rem)
             except Exception as e:
                 print(f"[theme_watcher] {e}", file=sys.stderr)
 
