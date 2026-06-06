@@ -323,7 +323,13 @@ def resolve_cmd(name, explicit=""):
             continue
         for ext in exts:
             p = os.path.join(folder, name + ext)
-            if os.path.isfile(p) and os.access(p, os.X_OK):
+            # Windows では os.access(X_OK) がファイル存在でほぼ常に True を返し実行可否
+            # 判定にならない。拡張子(PATHEXT 相当の exts)で既に絞っているため isfile で十分。
+            # POSIX のみ実行ビットを併用する。
+            if os.name == "nt":
+                if os.path.isfile(p):
+                    return p
+            elif os.path.isfile(p) and os.access(p, os.X_OK):
                 return p
     return None
 
@@ -556,6 +562,16 @@ def provider_claude(cfg):
             res["error"] = "認証情報が見つかりません (~/.claude/.credentials.json)。Claude Code にログインしてください。"
             return res
 
+        # トークンの有効期限(epoch ms)が分かっていて既に過去なら、API を叩く前に
+        # 期限切れを返す。無駄なリクエストと 429 誘発を避ける(環境変数トークンは expires_at 無し)。
+        if expires_at:
+            try:
+                if float(expires_at) / 1000.0 <= time.time():
+                    res["error"] = "トークン期限切れ。Claude Code を一度起動/実行すると自動更新されます。"
+                    return res
+            except (TypeError, ValueError):
+                pass
+
         import urllib.request
         import urllib.error
         ver = _claude_code_version()
@@ -618,10 +634,14 @@ def provider_claude(cfg):
 # ---------------------------------------------------------------------------
 # Provider: Antigravity  (antigravity-usage --json)
 # ---------------------------------------------------------------------------
-def _walk_find_models(obj, found, parent_key=None):
+def _walk_find_models(obj, found, parent_key=None, depth=0):
     """JSON を再帰的に走査し、remaining 系 + reset 系を持つオブジェクトを収集。
     モデル名が辞書のキー(例 {"models":{"Gemini 3.5 Flash":{...}}})の場合は
-    parent_key を名前として採用する。"""
+    parent_key を名前として採用する。
+    入力は信頼できる CLI 出力だが、想定外に深くネストした JSON でのスタック超過を
+    避けるため depth に上限を設け、超えたら打ち切る。"""
+    if depth > 50:
+        return
     if isinstance(obj, dict):
         keys = {k.lower(): k for k in obj.keys()}
         remain_key = None
@@ -665,10 +685,10 @@ def _walk_find_models(obj, found, parent_key=None):
                 "auto": auto,
             })
         for k, v in obj.items():
-            _walk_find_models(v, found, parent_key=k)
+            _walk_find_models(v, found, parent_key=k, depth=depth + 1)
     elif isinstance(obj, list):
         for v in obj:
-            _walk_find_models(v, found, parent_key=parent_key)
+            _walk_find_models(v, found, parent_key=parent_key, depth=depth + 1)
 
 
 def build_antigravity_cmd(cfg):
@@ -1068,7 +1088,7 @@ def run_tray(cfg):
         with state["lock"]:
             if state["fetching"]:
                 state["pending"] = True   # 取得中の要求は完了後に消化
-                return
+                return False              # 競合で繰り延べた(呼び出し側に通知)
             state["fetching"] = True
             state["pending"] = False
         _apply_ui(icon)            # 「取得中」を即時表示
@@ -1096,6 +1116,7 @@ def run_tray(cfg):
                 state["pending"] = False
             _apply_ui(icon)
             raise
+        return True                 # 実際に取得を実行した
 
     def build_tooltip(results):
         with state["lock"]:
@@ -1122,11 +1143,14 @@ def run_tray(cfg):
 
     def worker():
         while True:
+            deferred = False
             try:
-                do_refresh(icon)
+                # do_refresh が False を返すのは手動更新と競合してこの回を繰り延べたとき。
+                # その場合は通常間隔を待たず短時間で再試行し、定期更新の取りこぼしを防ぐ。
+                deferred = do_refresh(icon) is False
             except Exception as e:
                 print(f"[worker] {e}", file=sys.stderr)
-            time.sleep(max(30, int(cfg.get("refresh_seconds", 300))))
+            time.sleep(5 if deferred else max(30, int(cfg.get("refresh_seconds", 300))))
 
     def theme_watcher():
         # システムテーマ(ライト/ダーク)を短い間隔で監視し、変化したら
