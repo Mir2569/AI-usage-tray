@@ -26,9 +26,23 @@ import shutil
 import argparse
 import threading
 import subprocess
+import webbrowser
 from datetime import datetime, timezone, timedelta
 
 HOME = os.path.expanduser("~")
+
+# 配布元・作者リンク(ヘルプメニューから開く)
+GITHUB_URL = "https://github.com/Mir2569/ai-usage-tray"
+AUTHOR_X_URL = "https://x.com/E_Mir_a"
+
+# トレイアイコンの配色モード。残量しきい値(>=50 / >=20 / <20)ごとの塗り色を定義する。
+# 文字色は塗り色の明度から自動選択(make_icon_image)。None(取得不可)の灰は別扱い。
+ICON_COLOR_MODES = {
+    # 緑→黄→赤(標準)
+    "classic":    {"high": (46, 160, 67, 255),  "mid": (210, 153, 34, 255), "low": (218, 54, 51, 255)},
+    # 青→黄→赤(色弱対応)。high を緑から青(#2563EB)に変更し、緑/赤の混同を避ける。
+    "colorblind": {"high": (37, 99, 235, 255),  "mid": (210, 153, 34, 255), "low": (218, 54, 51, 255)},
+}
 
 # 共有設定 cfg への並行アクセス(設定保存スレッドの差し替え vs 取得スレッドの読み取り)を
 # 直列化するためのロック。差し替え中の一時的な空 dict を読んで KeyError になるのを防ぐ。
@@ -108,6 +122,8 @@ DEFAULT_CONFIG = {
     "refresh_seconds": 300,            # 自動更新間隔(秒)
     "codex_max_days": 10,              # Codex セッションログの走査日数
     "enabled": {"claude": True, "codex": True, "antigravity": True},
+    # トレイアイコンの配色モード。"classic"(緑→黄→赤) / "colorblind"(青→黄→赤)
+    "icon_color_mode": "classic",
     # Antigravity のオートコンプリート専用モデルも表示するか(既定は非表示)
     "antigravity_show_autocomplete": False,
     # antigravity-usage が未検出のとき npx 経由で取得するか(既定は無効=opt-in)。
@@ -872,22 +888,23 @@ def _windows_is_light_theme():
         return None
 
 
-def make_icon_image(remaining):
+def make_icon_image(remaining, color_mode="classic"):
     from PIL import Image, ImageDraw
     light = _windows_is_light_theme()
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # 残量で塗り色を決定
+    # 残量で塗り色を決定(配色モードのパレットから引く。未知のモードは classic にフォールバック)
+    palette = ICON_COLOR_MODES.get(color_mode, ICON_COLOR_MODES["classic"])
     if remaining is None:
         fill = (130, 130, 130, 255)
     elif remaining >= 50:
-        fill = (46, 160, 67, 255)
+        fill = palette["high"]
     elif remaining >= 20:
-        fill = (210, 153, 34, 255)
+        fill = palette["mid"]
     else:
-        fill = (218, 54, 51, 255)
+        fill = palette["low"]
 
     # タスクバー背景に対して縁取りを反転(ライトなら暗い縁、ダークなら明るい縁)
     if light is True:
@@ -931,6 +948,11 @@ def run_tray(cfg):
              "remaining": None, "theme": _windows_is_light_theme(),
              "fetching": False, "pending": False}
 
+    def _color_mode():
+        # 設定差し替え中の空 dict を読まないようロック下で配色モードを取得する。
+        with cfg_lock:
+            return cfg.get("icon_color_mode", "classic")
+
     def show_settings(icon):
         def run_launcher():
             if getattr(sys, "frozen", False):
@@ -951,6 +973,29 @@ def run_tray(cfg):
                 do_refresh(icon)
 
         threading.Thread(target=run_launcher, daemon=True).start()
+
+    def _build_help_menu(Item, Menu):
+        # 現在の配色モードに合わせて凡例(色と残量の対応)・使い方の要約・外部リンクを作る。
+        with cfg_lock:
+            mode = cfg.get("icon_color_mode", "classic")
+            interval = int(cfg.get("refresh_seconds", 300))
+        high_name = "青" if mode == "colorblind" else "緑"
+        return Menu(
+            Item("― 色と残量の見方 ―", None, enabled=False),
+            Item(f"  50%以上 : {high_name}", None, enabled=False),
+            Item("  20〜49% : 黄", None, enabled=False),
+            Item("  20%未満 : 赤", None, enabled=False),
+            Item("  取得不可 : 灰", None, enabled=False),
+            Menu.SEPARATOR,
+            Item("― 使い方 ―", None, enabled=False),
+            Item(f"  自動更新: {interval}秒ごと", None, enabled=False),
+            Item("  数字は一番余裕のない枠の残り%", None, enabled=False),
+            Item("  配色は「設定...」で切替", None, enabled=False),
+            Item("  不調時は --probe で診断", None, enabled=False),
+            Menu.SEPARATOR,
+            Item("GitHub を開く", lambda icon, item: webbrowser.open(GITHUB_URL)),
+            Item("X (作者) を開く", lambda icon, item: webbrowser.open(AUTHOR_X_URL)),
+        )
 
     def build_menu():
         items = []
@@ -994,6 +1039,7 @@ def run_tray(cfg):
                 if r["note"]:
                     items.append(Item("   " + r["note"][:120], None, enabled=False))
             items.append(Menu.SEPARATOR)
+        items.append(Item("ヘルプ", _build_help_menu(Item, Menu)))
         items.append(Item("設定...", lambda icon, item: show_settings(icon)))
         items.append(Item("今すぐ更新", lambda icon, item: threading.Thread(
             target=do_refresh, args=(icon,), daemon=True).start()))
@@ -1009,7 +1055,7 @@ def run_tray(cfg):
             rem = state["remaining"]
             results = list(state["results"])
         with ui_lock:
-            icon.icon = make_icon_image(rem)
+            icon.icon = make_icon_image(rem, _color_mode())
             icon.title = build_tooltip(results)
             icon.menu = build_menu()
             icon.update_menu()
@@ -1072,7 +1118,7 @@ def run_tray(cfg):
             tip = tip[:124] + "..."
         return tip
 
-    icon = pystray.Icon("ai_usage", make_icon_image(None), "AI Usage 取得中...", menu=build_menu())
+    icon = pystray.Icon("ai_usage", make_icon_image(None, _color_mode()), "AI Usage 取得中...", menu=build_menu())
 
     def worker():
         while True:
@@ -1096,7 +1142,7 @@ def run_tray(cfg):
                         state["theme"] = theme
                 if changed:
                     with ui_lock:
-                        icon.icon = make_icon_image(rem)
+                        icon.icon = make_icon_image(rem, _color_mode())
             except Exception as e:
                 print(f"[theme_watcher] {e}", file=sys.stderr)
 
@@ -1214,7 +1260,7 @@ def run_settings_gui(cfg):
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
-    root.geometry("420x380")
+    root.geometry("420x460")
     root.resizable(False, False)
 
     default_font = ("Yu Gothic UI", 10)
@@ -1253,6 +1299,23 @@ def run_settings_gui(cfg):
     ttk.Checkbutton(anti_lf, text="オートコンプリート専用モデルも表示する", variable=var_auto).pack(anchor=tk.W, pady=(0, 5))
     ttk.Label(anti_lf, text="※ モデルは共通枠ごとに自動でまとめて表示されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
 
+    # 4. アイコン表示(配色モード)
+    icon_lf = ttk.LabelFrame(main_frame, text="アイコン表示", padding="10")
+    icon_lf.pack(fill=tk.X, pady=(0, 10))
+
+    # 表示ラベル ↔ config 値 の対応。色弱の人向けに緑を青へ置き換えるモードを選べる。
+    color_mode_labels = {"classic": "緑→黄→赤（標準）", "colorblind": "青→黄→赤（色弱対応）"}
+    color_label_to_mode = {v: k for k, v in color_mode_labels.items()}
+    current_mode = cfg.get("icon_color_mode", "classic")
+    if current_mode not in color_mode_labels:
+        current_mode = "classic"
+
+    ttk.Label(icon_lf, text="配色モード:").pack(side=tk.LEFT)
+    var_color_mode = tk.StringVar(value=color_mode_labels[current_mode])
+    cmb_color = ttk.Combobox(icon_lf, textvariable=var_color_mode, state="readonly",
+                             values=list(color_mode_labels.values()), width=20)
+    cmb_color.pack(side=tk.LEFT, padx=5)
+
     # 保存/キャンセル
     btn_frame = ttk.Frame(main_frame)
     btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
@@ -1271,6 +1334,7 @@ def run_settings_gui(cfg):
         cfg["enabled"]["antigravity"] = var_antigravity.get()
         cfg["refresh_seconds"] = val
         cfg["antigravity_show_autocomplete"] = var_auto.get()
+        cfg["icon_color_mode"] = color_label_to_mode.get(var_color_mode.get(), "classic")
 
         # 旧バージョンの設定に残っているモデルフィルタは不要になったため掃除する
         cfg.pop("antigravity_models", None)
