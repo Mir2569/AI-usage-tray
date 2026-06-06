@@ -62,16 +62,35 @@ DEFAULT_CONFIG = {
 }
 
 
+def _deep_merge_and_validate(default_cfg, user_cfg, path=""):
+    for k, v in user_cfg.items():
+        current_path = f"{path}.{k}" if path else k
+        if k not in default_cfg:
+            # デフォルトに存在しないキーはそのまま受け入れる
+            default_cfg[k] = v
+            continue
+
+        default_val = default_cfg[k]
+
+        # 双方とも辞書型の場合は再帰マージ
+        if isinstance(default_val, dict) and isinstance(v, dict):
+            _deep_merge_and_validate(default_val, v, current_path)
+        # 型が不一致の場合（bool は int のサブクラスなので type で厳密チェック、ただし int/float の相互変換は許容。boolは除外）
+        elif type(default_val) is not type(v) and not (isinstance(default_val, (int, float)) and isinstance(v, (int, float)) and not isinstance(default_val, bool) and not isinstance(v, bool)):
+            print(f"[config] 警告: キー '{current_path}' の型が不一致です（期待: {type(default_val).__name__}, 入力: {type(v).__name__}）。デフォルト値を使用します。", file=sys.stderr)
+        else:
+            default_cfg[k] = v
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             user = json.load(f)
-        for k, v in user.items():
-            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
-                cfg[k].update(v)
-            else:
-                cfg[k] = v
+        if isinstance(user, dict):
+            _deep_merge_and_validate(cfg, user)
+        else:
+            print("[config] 警告: 設定ファイルのルート要素が辞書型ではありません。デフォルト設定を使用します。", file=sys.stderr)
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -123,6 +142,8 @@ def fmt_reset(reset_at):
     """リセットまでの残り時間を 'あとX時間Y分 (HH:MM)' で。"""
     if not reset_at:
         return "リセット時刻 不明"
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
     delta = reset_at - now_utc()
     secs = int(delta.total_seconds())
     local = reset_at.astimezone()
@@ -163,8 +184,13 @@ def run_cmd(cmd, timeout=30):
     # noconsole(pythonw / exe)で動かすと、子プロセス起動のたびに黒いコンソール窓が
     # 一瞬出る。CREATE_NO_WINDOW でそれを抑止する(Windows のみ)。
     kwargs = {}
+    shell = False
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        # コマンドの拡張子が .bat や .cmd の場合は shell=True が必要
+        target = cmd[0] if isinstance(cmd, list) else cmd
+        if str(target).lower().endswith((".bat", ".cmd")):
+            shell = True
     try:
         proc = subprocess.run(
             cmd,
@@ -173,7 +199,7 @@ def run_cmd(cmd, timeout=30):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-            shell=False,
+            shell=shell,
             **kwargs,
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""
@@ -245,7 +271,12 @@ def find_latest_codex_event(sessions_dir, max_days=10):
     files = glob.glob(os.path.join(sessions_dir, "**", "rollout-*.jsonl"), recursive=True)
     if not files:
         return None, None, None, meta
-    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    def get_mtime_safe(p):
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return 0.0
+    files.sort(key=get_mtime_safe, reverse=True)
     cutoff = time.time() - max_days * 86400
     best = None
     best_key = None
@@ -364,6 +395,8 @@ def provider_codex(cfg):
 # ---------------------------------------------------------------------------
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _claude_cache = {"ts": 0.0, "data": None}
+claude_lock = threading.Lock()
+ui_lock = threading.Lock()
 
 
 def _read_claude_token():
@@ -400,8 +433,9 @@ def provider_claude(cfg):
 
     # レート制限(429)回避のため API レスポンスを 90 秒キャッシュ
     data = None
-    if _claude_cache["data"] is not None and (time.time() - _claude_cache["ts"]) < 90:
-        data = _claude_cache["data"]
+    with claude_lock:
+        if _claude_cache["data"] is not None and (time.time() - _claude_cache["ts"]) < 90:
+            data = _claude_cache["data"]
 
     if data is None:
         token, expires_at = _read_claude_token()
@@ -434,8 +468,9 @@ def provider_claude(cfg):
         except Exception as e:
             res["error"] = f"取得失敗: {str(e)[:150]}"
             return res
-        _claude_cache["ts"] = time.time()
-        _claude_cache["data"] = data
+        with claude_lock:
+            _claude_cache["ts"] = time.time()
+            _claude_cache["data"] = data
 
     def win(key, label):
         d = data.get(key)
@@ -444,8 +479,12 @@ def provider_claude(cfg):
         util = d.get("utilization")
         if util is None:
             return None
+        try:
+            used_pct = float(util)
+        except (ValueError, TypeError):
+            return None
         reset_at = parse_dt(d.get("resets_at"))
-        return make_window(label, used_pct=float(util), reset_at=reset_at)
+        return make_window(label, used_pct=used_pct, reset_at=reset_at)
 
     for key, label in (("five_hour", "5時間"), ("seven_day", "週")):
         w = win(key, label)
@@ -781,10 +820,11 @@ def run_tray(cfg):
             state["results"] = results
         rem = min_remaining(results)
         if icon is not None:
-            icon.icon = make_icon_image(rem)
-            icon.title = build_tooltip(results)
-            icon.menu = build_menu()
-            icon.update_menu()
+            with ui_lock:
+                icon.icon = make_icon_image(rem)
+                icon.title = build_tooltip(results)
+                icon.menu = build_menu()
+                icon.update_menu()
 
     def build_tooltip(results):
         parts = []
@@ -857,7 +897,8 @@ def run_probe(cfg):
     print(f"[Claude] endpoint: {CLAUDE_USAGE_URL}")
     if token:
         # キャッシュを無視して生レスポンスを 1 回取得
-        _claude_cache["data"] = None
+        with claude_lock:
+            _claude_cache["data"] = None
         r = provider_claude(cfg)
         print(f"[Claude] ok={r['ok']}  error={r['error']}")
         # 生データから機密情報が含まれる可能性のある部分を排除し主要キーのみ表示
