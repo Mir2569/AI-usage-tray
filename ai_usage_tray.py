@@ -190,7 +190,8 @@ def fmt_age(dt):
 
 
 def run_cmd(cmd, timeout=30):
-    """コマンドを実行し (returncode, stdout, stderr)。Windows の .cmd shim も考慮。"""
+    """コマンドを実行し (returncode, stdout, stderr)。Windows の .cmd shim も考慮。
+    timeout=None を渡すと無期限に待つ(終了が不定なサブプロセス用)。"""
     # noconsole(pythonw / exe)で動かすと、子プロセス起動のたびに黒いコンソール窓が
     # 一瞬出る。CREATE_NO_WINDOW でそれを抑止する(Windows のみ)。
     kwargs = {}
@@ -835,7 +836,10 @@ def run_tray(cfg):
             else:
                 cmd = [sys.executable, __file__, "--settings"]
 
-            rc, out, err = run_cmd(cmd, timeout=300)
+            # 設定ダイアログはユーザーがいつ閉じるか分からないため待ち時間に上限を設けない。
+            # 上限があると、長く開いたまま保存してもタイムアウト済みで親プロセスの cfg が
+            # 更新されず、表示が古いままになる (timeout=None で無期限に待つ)。
+            rc, out, err = run_cmd(cmd, timeout=None)
             if rc == 0:
                 new_cfg = load_config()
                 cfg.clear()
