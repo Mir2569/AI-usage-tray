@@ -111,13 +111,21 @@ def parse_dt(value):
             return dt
         except Exception:
             pass
-        # fromisoformat 失敗時(古い Python 等): 末尾TZを落として strptime で再挑戦。
+        # fromisoformat 失敗時(古い Python 等)の strptime フォールバック。
         # Python 3.10 以下は ミリ秒(%f)付き ISO を fromisoformat で扱えないため %f 形式も用意。
-        base = re.sub(r"(Z|[+-]\d{2}:?\d{2})$", "", s)
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
-                    "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S.%f"):
+        # まず %z でTZオフセット付きのまま解釈し、オフセットを失わないようにする
+        # (Python 3.7+ の %z は Z / +0900 / +09:00 を解釈できる)。
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z"):
             try:
-                return datetime.strptime(base, fmt).replace(tzinfo=timezone.utc)
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+        # TZ 指定が無い文字列のみ UTC とみなす
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
             except Exception:
                 continue
     return None
