@@ -65,8 +65,8 @@ AI Usage Tray は、Claude Code / Codex / Antigravity の残り使用量を Wind
 
 特に注意すること:
 
-- Claude Code の OAuth トークンは `~/.claude/.credentials.json` または環境変数から読むだけにし、ログや README、Issue、PR に値を出さない。
-- `python ai_usage_tray.py --probe` の出力を外部に貼るときは、API レスポンスやローカルパスに不要な情報が含まれていないか確認する。
+- Claude Code の OAuth トークンは `~/.claude/.credentials.json` または環境変数から読むだけにし、ログや README、Issue、PR に値を出さない。WSL 切替時は WSL 側 `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN` を参照するが、同様に値は出さない。
+- `python ai_usage_tray.py --probe` の出力を外部に貼るときは、API レスポンスやローカルパスに不要な情報が含まれていないか確認する。WSL 側の `/home/<user>` や `/mnt/<drive>/Users/<user>` も `mask_path` でマスクされるが、貼る前に必ず目視確認する。
 - `npx -y antigravity-usage --json` など外部コマンドの出力をそのまま公開しない。
 
 ## 開発コマンド
@@ -119,6 +119,7 @@ README、Agent Skill、設定サンプルなどのドキュメントのみを変
 - Windows の文字コード、PowerShell、`.bat`、`subprocess`、PyInstaller onedir ビルドが壊れていないか。
 - `shell=False` やコマンド解決の安全性が維持されているか。
 - OAuth トークン、API レスポンス、ローカルパスを不用意に出力していないか。
+- WSL 切替（`wsl.enabled.*`）が既定 false で、設定なしの従来 Windows 動作を維持しているか。`wsl.exe` 実行も `shell=False` と interop（`/mnt/`）誤実行回避が保たれているか。
 - README の使い方と実際のコマンドが一致しているか。
 
 ## GitHub 運用

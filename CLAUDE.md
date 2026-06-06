@@ -54,6 +54,19 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - 旧 `antigravity_models`（モデル部分一致フィルタ）は共通枠化により無意味なため **撤去済み**（設定 GUI・DEFAULT_CONFIG から削除。古い config の残存キーは無害に無視）。
 - 出典: https://github.com/skainguyen1412/antigravity-usage
 
+### WSL データソース切替（Issue #51 / PR #52）
+- provider ごとに WSL 側の認証情報・セッションログ・CLI を参照できる。設定 `wsl.distro`（空欄=既定 distro）と `wsl.enabled.{claude,codex,antigravity}`（既定すべて `false`）。**既定では従来どおり Windows 側を使う**ため、設定しない限り挙動は変わらない。型不一致や非 dict はデフォルトへフォールバック（`_provider_uses_wsl` 等が防御）。
+- 実行は `wsl.exe` 経由（`build_wsl_cmd` → `run_wsl_sh`/`run_wsl_cmd`）。`shell=False`・`CREATE_NO_WINDOW`・UTF-8 `errors="replace"` は Windows 経路と共通の `run_cmd` を通すため維持。distro・コマンドは独立 argv で渡し、スクリプト埋め込みのパス/パッケージ名は `_shell_quote` でエスケープ。
+- **停止中 distro を自動起動しない**: 各 provider は実行前に `_wsl_running_status`（`wsl --list --running --quiet`）でガードし、未起動なら `wsl -d <distro>` を促すメッセージで早期終了する。`wsl.distro` 空欄時は `wsl -l -v` の `*` から既定 distro 名を解決して照合。
+- **WSL 側に `python3` が必須**: Codex 解析・Claude credentials 読取・存在確認は WSL 内 `python3` を使う。未導入時は専用メッセージ（`_wsl_linux_command_exists` で事前判定）。
+- **Windows shim の誤実行回避**: WSL は Windows PATH を interop 継承するため、`_wsl_linux_command_path` が `command -v` の結果 `/mnt/<drive>/...` を除外。`claude --version` / `antigravity-usage` / `npx` すべてこの経路に統一し、interop 経由で Windows バイナリを掴まない。
+- Codex: WSL 内 `python3 -c` のインラインスクリプトで `~/.codex/sessions` を走査し、非機密な `rate_limits` のみ JSON で Windows 側へ返す（`find_latest_codex_event_wsl`。spawn は 1 回）。
+- Claude: WSL 側 `~/.claude/.credentials.json` を `python3` で読む。無ければ env トークンへフォールバックするが、`~/.profile` を source する方式のため **`~/.bashrc` だけの export は参照されない**。キャッシュは `source`（`Windows`/`WSL:<distro>`）で分離し混線を防ぐ。
+- Antigravity: WSL 側 Linux 版 `antigravity-usage --json`。`antigravity_npx_fallback: true` で WSL 側 `npx -y antigravity-usage@<版> --json` にフォールバック。
+- パスマスク: `mask_path` に `/home/<user>` と `/mnt/<drive>/Users/<user>` のマスクを追加済み（`--probe` 出力の共有対策）。
+- 既知の任意改善（low）: spawn 回数のメモ化（Issue #53）、`wsl --list` の UTF-16LE 明示デコードで非 ASCII distro 名対応（Issue #54）。
+- 出典: PR https://github.com/Mir2569/ai-usage-tray/pull/52
+
 ## Windows 固有の注意（ハマりどころ・対処済み）
 - **バッチファイル(.bat)は必ず ASCII のみで書く**。日本語を入れると cp932 コンソールで文字化けし、壊れたバイトをコマンドとして実行してしまう。日本語表示は Python 側に任せる。
 - **`.bat` の `echo` 内の `>` は必ず `^>` でエスケープする**。`echo Done -> dist\...\AIUsageTray.exe` のように書くと `>` がリダイレクトとして解釈され、**できたての exe を echo の文字列で上書き**してしまう（11 バイトの壊れた exe →「アプリが使用できません」）。Python バージョンは無関係なので注意（2026-06-06 に build_exe.bat で実際に踏んだ）。
@@ -86,3 +99,5 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 ## 検証状況
 - Claude/Codex/Antigravity の各パーサはユーザー実データ・模擬データで個別検証済み（Claude 49%/23%、Codex 5h/週、Antigravity 実 JSON で 13→9 モデル、フィルタ動作）。
 - exe 化も完了（Python 3.12 ビルドで起動・常駐を確認）。主要タスクは全て完了。
+- WSL データソース切替（#51 / PR #52）を追加。Windows 既定設定と WSL Ubuntu 24.04 設定の `--probe`/`--once` で確認済み（Antigravity は `antigravity-usage 0.2.9` で取得成功。Claude/Codex は token/session 不在環境のため provider エラー表示まで確認）。
+- 本体は約 1,900 行に肥大化しており、責務ごとのモジュール分割を検討中（Issue #55）。
