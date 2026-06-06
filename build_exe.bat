@@ -1,7 +1,6 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-chcp 65001 >nul
 
 echo ============================================================
 echo  AI Usage Tray - Build EXE (PyInstaller)

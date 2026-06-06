@@ -1,7 +1,6 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-chcp 65001 >nul
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 
@@ -11,12 +10,20 @@ echo ============================================================
 echo.
 
 echo [1/4] Checking Python...
-python --version
+set "PY=python"
+if exist .venv312\Scripts\python.exe (
+  set "PY=.venv312\Scripts\python.exe"
+  echo Using .venv312 virtual environment.
+) else if exist .venv\Scripts\python.exe (
+  set "PY=.venv\Scripts\python.exe"
+  echo Using .venv virtual environment.
+)
+"%PY%" --version
 if errorlevel 1 goto NOPYTHON
 echo.
 
 echo [2/4] Installing Python dependencies...
-python -m pip install -r requirements.txt
+"%PY%" -m pip install -r requirements.txt
 echo.
 
 echo [3/4] Checking Node.js / npm...
@@ -45,7 +52,7 @@ goto VERIFY
 echo.
 echo [4/4] Test run (print usage once)...
 echo.
-python ai_usage_tray.py --once
+"%PY%" ai_usage_tray.py --once
 echo.
 echo ============================================================
 echo  Done. Run run.bat to start the tray.
