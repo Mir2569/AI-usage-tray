@@ -445,9 +445,14 @@ def _wsl_running_status(cfg):
         if any(line.lower() == distro.lower() for line in running):
             return True, ""
         return False, f"WSL ディストリビューション '{distro}' が起動していません。`wsl -d {distro}` で起動してから再取得してください。"
+    default_distro = _wsl_default_distro_name()
+    if default_distro:
+        if any(line.lower() == default_distro.lower() for line in running):
+            return True, ""
+        return False, f"WSL 既定ディストリビューション '{default_distro}' が起動していません。`wsl -d {default_distro}` で起動してから再取得してください。"
     if running:
-        return True, ""
-    return False, "WSL ディストリビューションが起動していません。WSL を起動してから再取得してください。"
+        return False, "WSL 既定ディストリビューションを確認できませんでした。`wsl -l -v` で既定を確認してください。"
+    return False, "WSL 既定ディストリビューションが起動していません。WSL を起動してから再取得してください。"
 
 
 def _wsl_linux_command_path(cfg, name):
@@ -660,38 +665,16 @@ if not result["sessions_exists"]:
     print(json.dumps(result, ensure_ascii=False))
     sys.exit(0)
 
-roots = []
-today = datetime.date.today()
-for i in range(max_days + 1):
-    d = today - datetime.timedelta(days=i)
-    path = os.path.join(sessions, f"{d:%Y}", f"{d:%m}", f"{d:%d}")
-    if os.path.isdir(path):
-        roots.append(path)
-try:
-    roots.extend(
-        os.path.join(sessions, name)
-        for name in os.listdir(sessions)
-        if os.path.isfile(os.path.join(sessions, name))
-    )
-except OSError:
-    pass
-
 files = []
-for root_path in roots:
-    if os.path.isfile(root_path):
-        names = [os.path.basename(root_path)]
-        walk_iter = [(os.path.dirname(root_path), [], names)]
-    else:
-        walk_iter = os.walk(root_path)
-    for root, dirs, names in walk_iter:
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
-        for name in names:
-            if name.startswith("rollout-") and name.endswith(".jsonl"):
-                path = os.path.join(root, name)
-                try:
-                    files.append((path, os.stat(path).st_mtime))
-                except OSError:
-                    pass
+for root, dirs, names in os.walk(sessions):
+    dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+    for name in names:
+        if name.startswith("rollout-") and name.endswith(".jsonl"):
+            path = os.path.join(root, name)
+            try:
+                files.append((path, os.stat(path).st_mtime))
+            except OSError:
+                pass
 files.sort(key=lambda item: item[1], reverse=True)
 cutoff = time.time() - max_days * 86400
 best = None
