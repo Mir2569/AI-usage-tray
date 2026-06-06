@@ -36,12 +36,63 @@ cfg_lock = threading.Lock()
 
 
 def mask_path(path):
-    """パスに含まれる HOME フォルダ部分を ~ にマスクする。"""
+    """パスに含まれる HOME / ユーザー名部分をマスクする。
+    HOME だけでなく C:\\Users\\<名前>(区切り・大小文字違い)や環境変数のユーザー名も伏せ、
+    --probe 出力を Issue/PR に貼ってもローカル環境が漏れにくいようにする。"""
     if not path:
         return path
     if isinstance(path, list):
         return [mask_path(p) for p in path]
-    return str(path).replace(HOME, "~")
+    s = str(path).replace(HOME, "~")
+    # C:\Users\<名前> / C:/Users/<名前> 等(ドライブ・区切り・大小文字を問わず)
+    s = re.sub(r"([A-Za-z]:[\\/]+Users[\\/]+)[^\\/]+", r"\1***", s, flags=re.IGNORECASE)
+    user = os.environ.get("USERNAME") or os.environ.get("USER")
+    if user:
+        s = re.sub(re.escape(user), "***", s, flags=re.IGNORECASE)
+    return s
+
+
+# 機密と思しきキー名(値を伏せる対象)。dict / 文字列の両方の秘匿で共用する。
+_SECRET_KEYS = (
+    r"access_?token|refresh_?token|id_?token|api[_-]?key|secret|password|passwd|"
+    r"authorization|bearer|cookie|credential|token|email"
+)
+_SECRET_KEY_RE = re.compile(r"(" + _SECRET_KEYS + r")", re.IGNORECASE)
+
+# 文字列(JSON 化できない生出力)向け: "key": "値" / key=値 / クォート無し値 を *** にする。
+_SECRET_TEXT_QUOTED_RE = re.compile(
+    r'("(?:' + _SECRET_KEYS + r')"\s*:\s*")[^"]*(")', re.IGNORECASE)
+# key の後ろは "Bearer <token>" のように値が複数語になり得るので、区切り(改行/カンマ等)
+# まで丸ごと伏せて取りこぼしを防ぐ。
+_SECRET_TEXT_BARE_RE = re.compile(
+    r'((?:' + _SECRET_KEYS + r')\s*[:=]\s*)([^\r\n,;}]+)', re.IGNORECASE)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def redact_secrets(obj):
+    """dict/list を再帰的に走査し、機密と思しきキーの値を *** に置換する。"""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if isinstance(k, str) and _SECRET_KEY_RE.search(k):
+                out[k] = "***"
+            else:
+                out[k] = redact_secrets(v)
+        return out
+    if isinstance(obj, list):
+        return [redact_secrets(v) for v in obj]
+    return obj
+
+
+def redact_text(s):
+    """JSON 化できない生文字列向けの秘匿。機密キーの値や素のメールアドレスを *** にする。
+    壊れた JSON や警告ログ混じりの出力でもトークン/メール等が漏れないようにする。"""
+    if not s:
+        return s
+    s = _SECRET_TEXT_QUOTED_RE.sub(r"\1***\2", s)
+    s = _SECRET_TEXT_BARE_RE.sub(r"\1***", s)
+    s = _EMAIL_RE.sub("***@***", s)
+    return s
 
 # PyInstaller などで exe 化(凍結)された場合は exe のあるフォルダを基準にする
 if getattr(sys, "frozen", False):
@@ -510,7 +561,8 @@ def provider_claude(cfg):
                 res["error"] = f"API エラー {e.code}"
             return res
         except Exception as e:
-            res["error"] = f"取得失敗: {str(e)[:150]}"
+            # 例外文にローカルパス等が混じる場合に備え、秘匿・マスクしてから切り詰める。
+            res["error"] = f"取得失敗: {mask_path(redact_text(str(e)))[:150]}"
             return res
         with claude_lock:
             _claude_cache["ts"] = time.time()
@@ -632,7 +684,11 @@ def provider_antigravity(cfg):
 
     rc, out, err = run_cmd(cmd, timeout=60)
     if rc != 0 or not out.strip():
-        res["error"] = f"antigravity-usage 実行失敗: {(err or out).strip()[:200]}"
+        # 外部 CLI の stderr/stdout には email/token/パス等が混じり得る。エラー文は
+        # --probe / --once の正規化結果やトレイにも表示されるため、必ず秘匿・パスマスク
+        # してから(全文に適用後に)切り詰める。
+        detail = mask_path(redact_text((err or out).strip()))[:200]
+        res["error"] = f"antigravity-usage 実行失敗: {detail}"
         return res
     try:
         data = json.loads(out)
@@ -755,7 +811,8 @@ def collect(cfg):
         try:
             results.append(fn(cfg))
         except Exception as e:
-            results.append({"name": key, "ok": False, "error": f"内部エラー: {e}",
+            detail = mask_path(redact_text(str(e)))
+            results.append({"name": key, "ok": False, "error": f"内部エラー: {detail}",
                             "windows": [], "note": ""})
     return results
 
@@ -1052,10 +1109,13 @@ def run_tray(cfg):
 # ---------------------------------------------------------------------------
 # 診断 (probe)
 # ---------------------------------------------------------------------------
-def run_probe(cfg):
+def run_probe(cfg, show_raw=False):
     print("=" * 60)
     print("AI Usage Tray  PROBE")
     print("=" * 60)
+    if not show_raw:
+        print("（外部 CLI の生出力は既定で非表示です。必要なら --probe-raw を使ってください。）")
+        print("（出力を Issue/PR に貼る前に、機密やローカル情報が無いか確認してください。）")
     print(f"HOME = {mask_path(HOME)}")
     print(f"claude            : {mask_path(resolve_cmd('claude'))}")
     print(f"antigravity-usage : {mask_path(resolve_cmd('antigravity-usage', cfg['paths'].get('antigravity_usage','')))}")
@@ -1105,7 +1165,8 @@ def run_probe(cfg):
             for k in ("five_hour", "seven_day", "seven_day_sonnet", "seven_day_opus", "extra_usage"):
                 if k in raw_data:
                     safe_raw[k] = raw_data[k]
-        print(f"[Claude] raw (safe-subset): {json.dumps(safe_raw, ensure_ascii=False)}")
+        # 主要キーのみ抽出済みだが、念のため機密キーを redact してから表示
+        print(f"[Claude] raw (safe-subset): {json.dumps(redact_secrets(safe_raw), ensure_ascii=False)}")
     print()
 
     # antigravity-usage 生出力
@@ -1117,11 +1178,24 @@ def run_probe(cfg):
         print(f"[Antigravity] スキップ: {reason}")
     if cmd:
         rc, out, err = run_cmd(cmd, timeout=60)
-        print(f"[Antigravity] rc={rc}  stderr={err.strip()[:200]}")
-        # 出力内容に含まれるパスやメールアドレスをマスク
-        sanitized_out = mask_path(out.strip()[:1500])
-        sanitized_out = re.sub(r'"email":\s*"[^"]+"', '"email": "******@******"', sanitized_out)
-        print(f"[Antigravity] stdout(先頭1500): {sanitized_out}")
+        print(f"[Antigravity] rc={rc}")
+        if show_raw:
+            # 秘匿・パスマスクは必ず全文に適用してから表示長を切り詰める。先に切ると、
+            # 値が長さ境界(200/1500)をまたいだ際に正規表現へ一致せず途中まで漏れる。
+            safe_err = mask_path(redact_text(err.strip()))
+            print(f"[Antigravity] stderr: {safe_err[:200]}")
+            # JSON ならキー名で再帰 redact、壊れた JSON 等はそのまま。最後に必ず
+            # 文字列向け redact_text を通し、email 以外のキー配下のメール等(JSON 経路で
+            # redact_secrets が拾えない値)も含めて秘匿してから表示する。
+            raw = out.strip()
+            try:
+                shown = json.dumps(redact_secrets(json.loads(raw)), ensure_ascii=False)
+            except Exception:
+                shown = raw
+            shown = mask_path(redact_text(shown))
+            print(f"[Antigravity] stdout(redacted, 先頭1500): {shown[:1500]}")
+        else:
+            print("[Antigravity] raw 出力は非表示(--probe-raw で表示)。値は下の正規化結果を参照。")
     print()
 
     print("=" * 60)
@@ -1230,7 +1304,9 @@ def run_settings_gui(cfg):
 def main():
     ap = argparse.ArgumentParser(description="AI Usage Tray")
     ap.add_argument("--once", action="store_true", help="1回だけ取得してテキスト表示")
-    ap.add_argument("--probe", action="store_true", help="各データソースの生データを表示")
+    ap.add_argument("--probe", action="store_true", help="各データソースの検出状況・正規化結果を表示")
+    ap.add_argument("--probe-raw", action="store_true",
+                    help="--probe に加えて外部 CLI の生出力も表示(redact 済みだが共有前に要確認)")
     ap.add_argument("--settings", action="store_true", help="設定ダイアログを表示")
     args = ap.parse_args()
 
@@ -1247,8 +1323,8 @@ def main():
     if args.settings:
         run_settings_gui(cfg)
         return
-    if args.probe:
-        run_probe(cfg)
+    if args.probe or args.probe_raw:
+        run_probe(cfg, show_raw=args.probe_raw)
         return
     if args.once:
         print(summarize_text(collect(cfg)))

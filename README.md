@@ -17,8 +17,11 @@ Claude Code / Codex / Antigravity の残り使用量を、Windows のタスク�
 ```bat
 python ai_usage_tray.py            # トレイ常駐で起動
 python ai_usage_tray.py --once     # 1回だけ取得してテキスト表示（テスト用）
-python ai_usage_tray.py --probe    # 各データソースの生データ・検出パス・正規化結果（診断用）
+python ai_usage_tray.py --probe    # 検出パス・正規化結果（診断用。外部CLIの生出力は非表示）
+python ai_usage_tray.py --probe-raw # 上記に加えて外部CLIの生出力も表示（redact 済み）
 ```
+
+> ⚠ `--probe` / `--probe-raw` の出力を Issue や PR に貼る前に、トークン・メール・ローカルパス等が残っていないか必ず確認してください。生出力は既定で非表示で、`--probe-raw` 指定時のみ機密キーを伏せた上で表示されます。
 
 ---
 
@@ -61,7 +64,7 @@ python ai_usage_tray.py --probe    # 各データソースの生データ・検�
 メモ:
 - 成果物は **onedir 構成**（`dist\AIUsageTray\` フォルダ）。フォルダごと配布・移動してください。
 - `config.json` は exe と同じ階層に置きます（`build_exe.bat` が自動でコピーします）。
-- exe はコンソールを出さないので `--once` / `--probe` の文字は見えません。診断は `python ai_usage_tray.py --probe` を使ってください。
+- exe はコンソールを出さないので `--once` / `--probe` の文字は見えません。診断は `python ai_usage_tray.py --probe`（生出力も要るなら `--probe-raw`）を使ってください。
 
 ---
 
@@ -110,7 +113,7 @@ python ai_usage_tray.py --probe    # 各データソースの生データ・検�
 python ai_usage_tray.py --probe
 ```
 
-各データソースの生出力・検出パス・正規化結果をまとめて表示します。
+検出パス・正規化結果をまとめて表示します。外部 CLI の生出力は既定で非表示で、必要なときだけ `--probe-raw` で（機密キーを伏せた上で）表示できます。**出力を外部共有する前に、トークン・メール・ローカルパス等が含まれていないか確認してください。**
 
 - **Claude が出ない** → `~/.claude/.credentials.json` が無い／トークン期限切れ。Claude Code に一度ログイン／起動すれば直ります。
 - **Codex が出ない** → Codex で一度メッセージを送るとセッションログが作られます。
