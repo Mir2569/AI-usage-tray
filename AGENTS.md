@@ -11,7 +11,7 @@
 - PR 作成: `.agents/skills/pr/SKILL.md`
 - レビュー: `.agents/skills/review/SKILL.md`
 
-Claude Code では、これらと同内容のスキルを `.claude/skills/`（正本）から自動検出し、`/github-issue`・`/github-pr`・`/github-review` として使えます。両者は同期させること（詳細は `.claude/skills/README.md`）。GitHub PR のレビューは、指摘を該当行へインラインコメントで投稿するのを既定とします。
+この `.agents/skills/` が内容の正です。Claude Code は同内容の同期コピーを `.claude/skills/` から自動検出し、`/github-issue`・`/github-pr`・`/github-review` として使えます。編集は `.agents/skills/` 側で行い、`.claude/skills/` へコピーして同期すること（詳細は `.claude/skills/README.md`）。GitHub PR のレビューは、指摘を該当行へインラインコメントで投稿するのを既定とします。
 
 ## 基本方針
 

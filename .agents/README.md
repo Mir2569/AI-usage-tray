@@ -8,9 +8,10 @@
 
 ## `.claude/skills/` との同期
 
-Claude Code はスキルを `.claude/skills/` からしか自動検出しないため、同じ内容のコピーが `.claude/skills/{github-issue,github-pr,github-review}/SKILL.md` にあります。
+**この `.agents/skills/` が「正」**です。Claude Code はスキルを `.claude/skills/` からしか自動検出しないため、同じ内容の同期コピーを `.claude/skills/{github-issue,github-pr,github-review}/SKILL.md` に置いています（Claude Code が読みに行く先）。
 
-- **`.claude/skills/` が「正」**。スキルを変更したら、こちら（`.agents/skills/`）の対応ファイルも同じ内容へ更新して同期する。
+- 編集は `.agents/skills/` 側で行う。
+- 変更したら `.claude/skills/` の対応ファイルへ同じ内容をコピーして同期する。
 - Windows ではシンボリックリンクが使えないため、リンクではなくファイルコピーで運用する。
 
 共通のリポジトリ前提はルートの `AGENTS.md` を参照してください。

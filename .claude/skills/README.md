@@ -1,8 +1,10 @@
-# Claude Code Skills（正本）
+# Claude Code Skills（`.agents/skills/` の同期コピー）
 
 このディレクトリは **Claude Code が自動検出する invokable スキル**の置き場です。
 Claude Code はスキルを `.claude/skills/`（プロジェクト）または `~/.claude/skills/`（ユーザー）からのみ検出するため、
-`/github-issue`・`/github-pr`・`/github-review` として使うにはここに置く必要があります。
+`/github-issue`・`/github-pr`・`/github-review` として使うにはここにファイルを置く必要があります。
+
+ただし内容の**正は `.agents/skills/`** です。ここはそれを Claude Code 用に読み込めるよう置いた同期コピーで、直接の編集起点にはしません。
 
 ## スキル一覧
 
@@ -12,10 +14,10 @@ Claude Code はスキルを `.claude/skills/`（プロジェクト）または `
 
 ## `.agents/skills/` との関係（同期メモ）
 
-同じ内容のコピーが `.agents/skills/{issue,pr,review}/SKILL.md` にもあります（Codex など Claude Code 以外のエージェントが読むため）。
+正の内容は `.agents/skills/{issue,pr,review}/SKILL.md` にあります（Codex など Claude Code 以外のエージェントが読む場所）。
 
-- **本ディレクトリ（`.claude/skills/`）を「正」**とする。
-- スキルの内容を変更したら、`.agents/skills/` 側の対応ファイルも**同じ内容に更新**して同期する。
+- **`.agents/skills/` が「正」**。編集はそちらで行う。
+- スキルを変更したら、本ディレクトリ（`.claude/skills/`）の対応ファイルも**同じ内容にコピーして同期**する（Claude Code が読みに行くのはここ）。
 - Windows ではシンボリックリンクが使えないため、リンクではなくファイルコピーで運用する。
 
 ## 注意
