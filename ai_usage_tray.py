@@ -1174,17 +1174,20 @@ def run_probe(cfg, show_raw=False):
         rc, out, err = run_cmd(cmd, timeout=60)
         print(f"[Antigravity] rc={rc}")
         if show_raw:
-            print(f"[Antigravity] stderr: {mask_path(redact_text(err.strip()[:200]))}")
+            # 秘匿・パスマスクは必ず全文に適用してから表示長を切り詰める。先に切ると、
+            # 値が長さ境界(200/1500)をまたいだ際に正規表現へ一致せず途中まで漏れる。
+            safe_err = mask_path(redact_text(err.strip()))
+            print(f"[Antigravity] stderr: {safe_err[:200]}")
             # JSON ならキー名で再帰 redact、壊れた JSON 等はそのまま。最後に必ず
             # 文字列向け redact_text を通し、email 以外のキー配下のメール等(JSON 経路で
-            # redact_secrets が拾えない値)も含めて秘匿してから mask_path で表示する。
+            # redact_secrets が拾えない値)も含めて秘匿してから表示する。
             raw = out.strip()
             try:
                 shown = json.dumps(redact_secrets(json.loads(raw)), ensure_ascii=False)
             except Exception:
                 shown = raw
-            shown = redact_text(shown)
-            print(f"[Antigravity] stdout(redacted, 先頭1500): {mask_path(shown[:1500])}")
+            shown = mask_path(redact_text(shown))
+            print(f"[Antigravity] stdout(redacted, 先頭1500): {shown[:1500]}")
         else:
             print("[Antigravity] raw 出力は非表示(--probe-raw で表示)。値は下の正規化結果を参照。")
     print()
