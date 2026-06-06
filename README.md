@@ -34,7 +34,7 @@ python ai_usage_tray.py --probe    # 各データソースの生データ・検�
 
 - **Claude**: `~/.claude/.credentials.json` の OAuth アクセストークンを使って公式 API を叩きます。トークンは Claude Code を使うと自動更新されます。期限切れなら一度 Claude Code を起動すれば直ります。
 - **Codex**: 追加インストール不要。Codex で一度メッセージを送るとセッションログが作られ、そこから読みます。
-- **Antigravity**: `antigravity-usage`（npm）が必要。未導入なら自動で `npx -y antigravity-usage` にフォールバックします。Antigravity の **IDE が起動していれば**ローカル接続で取得できます。
+- **Antigravity**: `antigravity-usage`（npm）が必要。**既定では未導入時に何もしません**（`npm i -g antigravity-usage` での導入を推奨）。`config.json` で `antigravity_npx_fallback: true` にすると、未導入時に `npx -y antigravity-usage@<版>` で取得します（後述の注意あり）。Antigravity の **IDE が起動していれば**ローカル接続で取得できます。
 
 ---
 
@@ -84,13 +84,15 @@ python ai_usage_tray.py --probe    # 各データソースの生データ・検�
 - `codex_max_days`: Codex セッションログをさかのぼって探す日数。既定10日。
 - `enabled`: 表示するツールだけ true。
 - `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。Antigravity のモデルは残量・リセット時刻が一致する**共通枠**ごとに自動でまとめて1行表示されます（例 `Gemini 3 (共通枠)` / `Claude / GPT-OSS (共通枠)`）。
+- `antigravity_npx_fallback`: `antigravity-usage` が未検出のとき `npx` 経由で取得するか（**既定 false = opt-in**）。⚠ 有効にすると、常駐アプリがバックグラウンドで（既定5分ごとや初回・キャッシュ切れ時に）**npm からパッケージを取得・実行**します。気になる場合は無効のまま `npm i -g antigravity-usage` で導入するか、`paths.antigravity_usage` で実行ファイルを明示してください。
+- `antigravity_usage_version`: 上記 npx フォールバック時に使う固定バージョン（既定 `"0.2.9"`）。空文字にすると無印（最新）になりますが、サプライチェーンの観点から**非推奨**です。
 - `paths.antigravity_usage`: `antigravity-usage` を自動検出できない場合に実行ファイルのフルパスを指定。
 
 ---
 
 ## ⚠ npm install が通らないとき（Antigravity 用）
 
-**グローバルインストールは必須ではありません。** 見つからなければ自動で `npx` 経由に切り替えます（初回だけ少し遅いだけ）。
+**既定ではグローバルインストールが必要です。** `config.json` で `antigravity_npx_fallback: true` にすると、未検出時に `npx -y antigravity-usage@<版>` へフォールバックします（初回だけ少し遅く、npm からの取得・実行が走る点に注意）。
 
 それでも入れたい／npm 自体が反応しない場合:
 
