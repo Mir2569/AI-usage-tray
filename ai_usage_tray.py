@@ -918,7 +918,8 @@ def run_tray(cfg):
                 parts.append(f"{r['name']}: {min(rems):.0f}%")
             else:
                 parts.append(f"{r['name']}: OK")
-        tip = "AI Usage  |  " + "   ".join(parts)
+        # 各プロバイダを改行で区切り、ホバー時に縦並びで見やすく表示する。
+        tip = "AI Usage\n" + "\n".join(parts)
         # Windows 通知領域のツールチップは 127 文字までしか表示されない。超過分を安全に切り詰める。
         if len(tip) > 127:
             tip = tip[:124] + "..."
