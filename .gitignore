@@ -29,3 +29,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# ---- Claude Code (ローカル設定のみ除外。.claude/skills/ はコミットする) ----
+.claude/settings.local.json
