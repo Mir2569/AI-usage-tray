@@ -2,7 +2,6 @@
   "refresh_seconds": 300,
   "codex_max_days": 10,
   "enabled": { "claude": true, "codex": true, "antigravity": true },
-  "antigravity_models": [],
   "antigravity_show_autocomplete": false,
   "paths": { "antigravity_usage": "" }
 }

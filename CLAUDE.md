@@ -49,7 +49,9 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - ローカルモードは Antigravity の **IDE（エディタ）** が起動していれば自動接続。IDE を使わない場合は `antigravity-usage login`（クラウドモード）が必要。`agy` CLI 単体ではローカルサーバが立たない。
 - 実データ形式: `models` は配列。各要素 `label`, `modelId`, `remainingPercentage`(0..1 の割合。1=100%), `resetTime`(ISO), `isAutocompleteOnly`。
 - パーサ `_walk_find_models` は JSON を再帰走査して remaining/used + reset を持つオブジェクトを汎用抽出（将来の形式変更に強い）。`remainingPercentage` 等のキー名も対応済み。
-- 既定で `isAutocompleteOnly: true` のモデルは除外（`antigravity_show_autocomplete` で表示可）。`antigravity_models` で label/modelId を区切り無視（`_norm`）で部分一致フィルタ。
+- 既定で `isAutocompleteOnly: true` のモデルは除外（`antigravity_show_autocomplete` で表示可）。
+- **共通枠の集約（Issue #20）**: Antigravity のモデルは remaining%・resetTime が枠単位で完全一致する（実データ上 Gemini 系 / Claude+GPT-OSS 系の2枠）。`(remaining_pct, reset_at)` でグループ化し、共通接頭辞があればそれを（例 `Gemini 3 (共通枠)`）、無ければ先頭ファミリ名を列挙して（例 `Claude / GPT-OSS (共通枠)`）1行に集約する。
+- 旧 `antigravity_models`（モデル部分一致フィルタ）は共通枠化により無意味なため **撤去済み**（設定 GUI・DEFAULT_CONFIG から削除。古い config の残存キーは無害に無視）。
 - 出典: https://github.com/skainguyen1412/antigravity-usage
 
 ## Windows 固有の注意（ハマりどころ・対処済み）
