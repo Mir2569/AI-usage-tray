@@ -75,8 +75,8 @@ def _deep_merge_and_validate(default_cfg, user_cfg, path=""):
         # 双方とも辞書型の場合は再帰マージ
         if isinstance(default_val, dict) and isinstance(v, dict):
             _deep_merge_and_validate(default_val, v, current_path)
-        # 型が不一致の場合（bool は int のサブクラスなので type で厳密チェック、ただし int/float の相互変換は許容）
-        elif type(default_val) is not type(v) and not (isinstance(default_val, (int, float)) and isinstance(v, (int, float))):
+        # 型が不一致の場合（bool は int のサブクラスなので type で厳密チェック、ただし int/float の相互変換は許容。boolは除外）
+        elif type(default_val) is not type(v) and not (isinstance(default_val, (int, float)) and isinstance(v, (int, float)) and not isinstance(default_val, bool) and not isinstance(v, bool)):
             print(f"[config] 警告: キー '{current_path}' の型が不一致です（期待: {type(default_val).__name__}, 入力: {type(v).__name__}）。デフォルト値を使用します。", file=sys.stderr)
         else:
             default_cfg[k] = v
