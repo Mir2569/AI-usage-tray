@@ -29,6 +29,16 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 
 HOME = os.path.expanduser("~")
+
+
+def mask_path(path):
+    """パスに含まれる HOME フォルダ部分を ~ にマスクする。"""
+    if not path:
+        return path
+    if isinstance(path, list):
+        return [mask_path(p) for p in path]
+    return str(path).replace(HOME, "~")
+
 # PyInstaller などで exe 化(凍結)された場合は exe のあるフォルダを基準にする
 if getattr(sys, "frozen", False):
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -153,18 +163,25 @@ def run_cmd(cmd, timeout=30):
 
 
 def resolve_cmd(name, explicit=""):
-    """実行可能なコマンドのパスを返す。見つからなければ None。"""
+    """実行可能なコマンドのパスを返す。見つからなければ None。
+    コマンドプリロード攻撃を防ぐため、PATH 環境変数のディレクトリのみを探索する。"""
     if explicit:
         if os.path.exists(explicit):
             return explicit
-    p = shutil.which(name)
-    if p:
-        return p
-    # Windows の npm グローバル shim
+
+    exts = [""]
     if os.name == "nt":
-        for ext in (".cmd", ".exe", ".bat"):
-            p = shutil.which(name + ext)
-            if p:
+        exts = [".cmd", ".exe", ".bat", ""]
+
+    path_env = os.environ.get("PATH", "")
+    sep = ";" if os.name == "nt" else ":"
+    for folder in path_env.split(sep):
+        folder = folder.strip('"')
+        if not folder:
+            continue
+        for ext in exts:
+            p = os.path.join(folder, name + ext)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
                 return p
     return None
 
@@ -747,17 +764,17 @@ def run_probe(cfg):
     print("=" * 60)
     print("AI Usage Tray  PROBE")
     print("=" * 60)
-    print(f"HOME = {HOME}")
-    print(f"claude            : {resolve_cmd('claude')}")
-    print(f"antigravity-usage : {resolve_cmd('antigravity-usage', cfg['paths'].get('antigravity_usage',''))}")
-    print(f"npx               : {resolve_cmd('npx')}")
+    print(f"HOME = {mask_path(HOME)}")
+    print(f"claude            : {mask_path(resolve_cmd('claude'))}")
+    print(f"antigravity-usage : {mask_path(resolve_cmd('antigravity-usage', cfg['paths'].get('antigravity_usage','')))}")
+    print(f"npx               : {mask_path(resolve_cmd('npx'))}")
     print()
 
     # Codex 生データ
     sessions_dir = os.path.join(HOME, ".codex", "sessions")
-    print(f"[Codex] sessions dir exists: {os.path.isdir(sessions_dir)}  ({sessions_dir})")
+    print(f"[Codex] sessions dir exists: {os.path.isdir(sessions_dir)}  ({mask_path(sessions_dir)})")
     rl, ts, path = find_latest_codex_event(sessions_dir)
-    print(f"[Codex] latest rate_limits file: {path}")
+    print(f"[Codex] latest rate_limits file: {mask_path(path)}")
     print(f"[Codex] timestamp: {ts}")
     print(f"[Codex] rate_limits: {json.dumps(rl, ensure_ascii=False) if rl else None}")
     print()
@@ -765,7 +782,7 @@ def run_probe(cfg):
     # Claude Code 公式 OAuth usage API
     cred_path = os.path.join(HOME, ".claude", ".credentials.json")
     token, expires_at = _read_claude_token()
-    print(f"[Claude] credentials: {cred_path}  (exists={os.path.exists(cred_path)})")
+    print(f"[Claude] credentials: {mask_path(cred_path)}  (exists={os.path.exists(cred_path)})")
     print(f"[Claude] token: {'取得OK' if token else '見つかりません'}", end="")
     if expires_at:
         exp = parse_dt(expires_at)
@@ -778,7 +795,15 @@ def run_probe(cfg):
         _claude_cache["data"] = None
         r = provider_claude(cfg)
         print(f"[Claude] ok={r['ok']}  error={r['error']}")
-        print(f"[Claude] raw: {json.dumps(_claude_cache.get('data'), ensure_ascii=False)[:800]}")
+        # 生データから機密情報が含まれる可能性のある部分を排除し主要キーのみ表示
+        raw_data = _claude_cache.get("data")
+        safe_raw = None
+        if isinstance(raw_data, dict):
+            safe_raw = {}
+            for k in ("five_hour", "seven_day", "seven_day_sonnet", "seven_day_opus", "extra_usage"):
+                if k in raw_data:
+                    safe_raw[k] = raw_data[k]
+        print(f"[Claude] raw (safe-subset): {json.dumps(safe_raw, ensure_ascii=False)}")
     print()
 
     # antigravity-usage 生出力
@@ -787,11 +812,14 @@ def run_probe(cfg):
     if not cmd:
         npx = resolve_cmd("npx")
         cmd = [npx, "-y", "antigravity-usage", "--json"] if npx else None
-    print(f"[Antigravity] cmd: {cmd}")
+    print(f"[Antigravity] cmd: {mask_path(cmd)}")
     if cmd:
         rc, out, err = run_cmd(cmd, timeout=60)
         print(f"[Antigravity] rc={rc}  stderr={err.strip()[:200]}")
-        print(f"[Antigravity] stdout(先頭1500): {out.strip()[:1500]}")
+        # 出力内容に含まれるパスやメールアドレスをマスク
+        sanitized_out = mask_path(out.strip()[:1500])
+        sanitized_out = re.sub(r'"email":\s*"[^"]+"', '"email": "******@******"', sanitized_out)
+        print(f"[Antigravity] stdout(先頭1500): {sanitized_out}")
     print()
 
     print("=" * 60)
