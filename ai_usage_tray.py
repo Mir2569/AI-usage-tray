@@ -36,12 +36,43 @@ cfg_lock = threading.Lock()
 
 
 def mask_path(path):
-    """パスに含まれる HOME フォルダ部分を ~ にマスクする。"""
+    """パスに含まれる HOME / ユーザー名部分をマスクする。
+    HOME だけでなく C:\\Users\\<名前>(区切り・大小文字違い)や環境変数のユーザー名も伏せ、
+    --probe 出力を Issue/PR に貼ってもローカル環境が漏れにくいようにする。"""
     if not path:
         return path
     if isinstance(path, list):
         return [mask_path(p) for p in path]
-    return str(path).replace(HOME, "~")
+    s = str(path).replace(HOME, "~")
+    # C:\Users\<名前> / C:/Users/<名前> 等(ドライブ・区切り・大小文字を問わず)
+    s = re.sub(r"([A-Za-z]:[\\/]+Users[\\/]+)[^\\/]+", r"\1***", s, flags=re.IGNORECASE)
+    user = os.environ.get("USERNAME") or os.environ.get("USER")
+    if user:
+        s = re.sub(re.escape(user), "***", s, flags=re.IGNORECASE)
+    return s
+
+
+# 機密と思しき dict キー(値を伏せる対象)。
+_SECRET_KEY_RE = re.compile(
+    r"(access_?token|refresh_?token|id_?token|api[_-]?key|secret|password|passwd|"
+    r"authorization|bearer|cookie|credential|\btoken\b|\bemail\b)",
+    re.IGNORECASE,
+)
+
+
+def redact_secrets(obj):
+    """dict/list を再帰的に走査し、機密と思しきキーの値を *** に置換する。"""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if isinstance(k, str) and _SECRET_KEY_RE.search(k):
+                out[k] = "***"
+            else:
+                out[k] = redact_secrets(v)
+        return out
+    if isinstance(obj, list):
+        return [redact_secrets(v) for v in obj]
+    return obj
 
 # PyInstaller などで exe 化(凍結)された場合は exe のあるフォルダを基準にする
 if getattr(sys, "frozen", False):
@@ -1052,10 +1083,13 @@ def run_tray(cfg):
 # ---------------------------------------------------------------------------
 # 診断 (probe)
 # ---------------------------------------------------------------------------
-def run_probe(cfg):
+def run_probe(cfg, show_raw=False):
     print("=" * 60)
     print("AI Usage Tray  PROBE")
     print("=" * 60)
+    if not show_raw:
+        print("（外部 CLI の生出力は既定で非表示です。必要なら --probe-raw を使ってください。）")
+        print("（出力を Issue/PR に貼る前に、機密やローカル情報が無いか確認してください。）")
     print(f"HOME = {mask_path(HOME)}")
     print(f"claude            : {mask_path(resolve_cmd('claude'))}")
     print(f"antigravity-usage : {mask_path(resolve_cmd('antigravity-usage', cfg['paths'].get('antigravity_usage','')))}")
@@ -1105,7 +1139,8 @@ def run_probe(cfg):
             for k in ("five_hour", "seven_day", "seven_day_sonnet", "seven_day_opus", "extra_usage"):
                 if k in raw_data:
                     safe_raw[k] = raw_data[k]
-        print(f"[Claude] raw (safe-subset): {json.dumps(safe_raw, ensure_ascii=False)}")
+        # 主要キーのみ抽出済みだが、念のため機密キーを redact してから表示
+        print(f"[Claude] raw (safe-subset): {json.dumps(redact_secrets(safe_raw), ensure_ascii=False)}")
     print()
 
     # antigravity-usage 生出力
@@ -1117,11 +1152,18 @@ def run_probe(cfg):
         print(f"[Antigravity] スキップ: {reason}")
     if cmd:
         rc, out, err = run_cmd(cmd, timeout=60)
-        print(f"[Antigravity] rc={rc}  stderr={err.strip()[:200]}")
-        # 出力内容に含まれるパスやメールアドレスをマスク
-        sanitized_out = mask_path(out.strip()[:1500])
-        sanitized_out = re.sub(r'"email":\s*"[^"]+"', '"email": "******@******"', sanitized_out)
-        print(f"[Antigravity] stdout(先頭1500): {sanitized_out}")
+        print(f"[Antigravity] rc={rc}")
+        if show_raw:
+            print(f"[Antigravity] stderr: {mask_path(err.strip()[:200])}")
+            # JSON なら再帰 redact、無理なら mask_path のみ通して表示
+            raw = out.strip()
+            try:
+                shown = json.dumps(redact_secrets(json.loads(raw)), ensure_ascii=False)
+            except Exception:
+                shown = raw
+            print(f"[Antigravity] stdout(redacted, 先頭1500): {mask_path(shown[:1500])}")
+        else:
+            print("[Antigravity] raw 出力は非表示(--probe-raw で表示)。値は下の正規化結果を参照。")
     print()
 
     print("=" * 60)
@@ -1230,7 +1272,9 @@ def run_settings_gui(cfg):
 def main():
     ap = argparse.ArgumentParser(description="AI Usage Tray")
     ap.add_argument("--once", action="store_true", help="1回だけ取得してテキスト表示")
-    ap.add_argument("--probe", action="store_true", help="各データソースの生データを表示")
+    ap.add_argument("--probe", action="store_true", help="各データソースの検出状況・正規化結果を表示")
+    ap.add_argument("--probe-raw", action="store_true",
+                    help="--probe に加えて外部 CLI の生出力も表示(redact 済みだが共有前に要確認)")
     ap.add_argument("--settings", action="store_true", help="設定ダイアログを表示")
     args = ap.parse_args()
 
@@ -1247,8 +1291,8 @@ def main():
     if args.settings:
         run_settings_gui(cfg)
         return
-    if args.probe:
-        run_probe(cfg)
+    if args.probe or args.probe_raw:
+        run_probe(cfg, show_raw=args.probe_raw)
         return
     if args.once:
         print(summarize_text(collect(cfg)))
