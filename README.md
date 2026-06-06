@@ -83,8 +83,7 @@ python ai_usage_tray.py --probe    # 各データソースの生データ・検�
 - `refresh_seconds`: 自動更新間隔（秒）。既定5分。
 - `codex_max_days`: Codex セッションログをさかのぼって探す日数。既定10日。
 - `enabled`: 表示するツールだけ true。
-- `antigravity_models`: 表示モデルを部分一致で絞り込み（例 `["gemini-3-pro","gemini-3-flash"]`）。空なら主要モデルを自動選択。区切り文字・大文字小文字は無視されます。
-- `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。
+- `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。Antigravity のモデルは残量・リセット時刻が一致する**共通枠**ごとに自動でまとめて1行表示されます（例 `Gemini 3 (共通枠)` / `Claude / GPT-OSS (共通枠)`）。
 - `paths.antigravity_usage`: `antigravity-usage` を自動検出できない場合に実行ファイルのフルパスを指定。
 
 ---

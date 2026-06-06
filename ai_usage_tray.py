@@ -53,8 +53,6 @@ DEFAULT_CONFIG = {
     "refresh_seconds": 300,            # 自動更新間隔(秒)
     "codex_max_days": 10,              # Codex セッションログの走査日数
     "enabled": {"claude": True, "codex": True, "antigravity": True},
-    # Antigravity で表示したいモデル名の部分一致フィルタ(空なら主要モデルを自動選択)
-    "antigravity_models": [],
     # Antigravity のオートコンプリート専用モデルも表示するか(既定は非表示)
     "antigravity_show_autocomplete": False,
     # コマンドの明示パス(自動検出に失敗する場合のみ設定)
@@ -523,11 +521,6 @@ def provider_claude(cfg):
 # ---------------------------------------------------------------------------
 # Provider: Antigravity  (antigravity-usage --json)
 # ---------------------------------------------------------------------------
-def _norm(s):
-    """照合用に英数字のみへ正規化(区切り文字・大文字小文字・空白を無視)。"""
-    return re.sub(r"[^a-z0-9]", "", str(s).lower())
-
-
 def _walk_find_models(obj, found, parent_key=None):
     """JSON を再帰的に走査し、remaining 系 + reset 系を持つオブジェクトを収集。
     モデル名が辞書のキー(例 {"models":{"Gemini 3.5 Flash":{...}}})の場合は
@@ -567,14 +560,8 @@ def _walk_find_models(obj, found, parent_key=None):
                 if cand in keys and bool(obj[keys[cand]]):
                     auto = True
                     break
-            model_id = None
-            for cand in ("modelid", "model_id"):
-                if cand in keys:
-                    model_id = obj[keys[cand]]
-                    break
             found.append({
                 "name": name,
-                "model_id": model_id,
                 "remain_raw": obj.get(remain_key) if remain_key else None,
                 "used_raw": obj.get(used_key) if used_key else None,
                 "reset_raw": obj.get(reset_key) if reset_key else None,
@@ -624,7 +611,6 @@ def provider_antigravity(cfg):
         res["error"] = "モデル使用量の項目が見つかりませんでした(--probe で生データ確認)。"
         return res
 
-    filters = [_norm(s) for s in cfg.get("antigravity_models", []) if s]
     show_auto = bool(cfg.get("antigravity_show_autocomplete", False))
 
     def remaining_pct_of(item):
@@ -639,17 +625,11 @@ def provider_antigravity(cfg):
         return None
 
     seen = set()
-    candidates = 0  # オートコンプリート除外後の候補数
     raw_windows = []
     for item in found:
         if item.get("auto") and not show_auto:
             continue
-        candidates += 1
         name = str(item["name"]) if item["name"] is not None else "model"
-        # ラベルと modelId の両方を区切り無視で照合(ハイフン/スペース/ドットを吸収)
-        haystack = _norm(name) + _norm(item.get("model_id"))
-        if filters and not any(f in haystack for f in filters):
-            continue
         key = name.lower()
         if key in seen:
             continue
@@ -677,22 +657,28 @@ def provider_antigravity(cfg):
             res["windows"].append(group[0])
         else:
             labels = [w["label"] for w in group]
-            common_prefix = os.path.commonprefix(labels)
-            common_prefix = common_prefix.rstrip(" -_/.")
+            common_prefix = os.path.commonprefix(labels).rstrip(" -_/.([")
             if len(common_prefix) >= 3:
-                new_label = f"{common_prefix}等 (共通枠)"
+                # 共通接頭辞がある(例: Gemini 3.x 群)→ それをそのまま枠名にする
+                base = common_prefix
             else:
-                new_label = f"{labels[0]}等 (共通枠)"
+                # 接頭辞が無い混在枠(例: Claude + GPT-OSS)→ 先頭ファミリ名を列挙
+                fams = []
+                for lb in labels:
+                    fam = lb.split(" ")[0]
+                    if fam not in fams:
+                        fams.append(fam)
+                base = " / ".join(fams)
 
             repr_w = dict(group[0])
-            repr_w["label"] = new_label
+            repr_w["label"] = f"{base} (共通枠)"
             res["windows"].append(repr_w)
+
+    # 残りが少ない枠を上に表示(最も余裕のない枠を優先)。残量不明は末尾へ。
+    res["windows"].sort(key=lambda w: w["remaining_pct"] if w["remaining_pct"] is not None else float("inf"))
 
     if res["windows"]:
         res["ok"] = True
-    elif filters and candidates > 0:
-        # フィルタが厳しすぎて全部消えた場合は、全件に戻さず明示する
-        res["error"] = "antigravity_models のフィルタに一致するモデルがありません。config を確認してください。"
     else:
         res["error"] = "モデルを抽出できませんでした(--probe で生データ確認)。"
     return res
@@ -1050,7 +1036,7 @@ def run_settings_gui(cfg):
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
-    root.geometry("420x450")
+    root.geometry("420x380")
     root.resizable(False, False)
 
     default_font = ("Yu Gothic UI", 10)
@@ -1087,13 +1073,7 @@ def run_settings_gui(cfg):
 
     var_auto = tk.BooleanVar(value=cfg.get("antigravity_show_autocomplete", False))
     ttk.Checkbutton(anti_lf, text="オートコンプリート専用モデルも表示する", variable=var_auto).pack(anchor=tk.W, pady=(0, 5))
-
-    ttk.Label(anti_lf, text="表示するモデルの部分一致フィルタ (カンマ区切り):").pack(anchor=tk.W)
-    models_str = ", ".join(cfg.get("antigravity_models", []))
-    var_models = tk.StringVar(value=models_str)
-    ent_models = ttk.Entry(anti_lf, textvariable=var_models)
-    ent_models.pack(fill=tk.X, pady=(2, 0))
-    ttk.Label(anti_lf, text="※ 空の場合はすべての主要モデルを表示します。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W, pady=(2, 0))
+    ttk.Label(anti_lf, text="※ モデルは共通枠ごとに自動でまとめて表示されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
 
     # 保存/キャンセル
     btn_frame = ttk.Frame(main_frame)
@@ -1114,8 +1094,8 @@ def run_settings_gui(cfg):
         cfg["refresh_seconds"] = val
         cfg["antigravity_show_autocomplete"] = var_auto.get()
 
-        m_list = [s.strip() for s in var_models.get().split(",")]
-        cfg["antigravity_models"] = [s for s in m_list if s]
+        # 旧バージョンの設定に残っているモデルフィルタは不要になったため掃除する
+        cfg.pop("antigravity_models", None)
 
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
