@@ -1,2 +1,2 @@
-pystray>=0.19
-Pillow>=9
+pystray==0.19.5
+Pillow==12.2.0
