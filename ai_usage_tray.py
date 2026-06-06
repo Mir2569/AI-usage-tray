@@ -674,6 +674,9 @@ def provider_antigravity(cfg):
             repr_w["label"] = f"{base} (共通枠)"
             res["windows"].append(repr_w)
 
+    # 残りが少ない枠を上に表示(最も余裕のない枠を優先)。残量不明は末尾へ。
+    res["windows"].sort(key=lambda w: w["remaining_pct"] if w["remaining_pct"] is not None else float("inf"))
+
     if res["windows"]:
         res["ok"] = True
     else:
