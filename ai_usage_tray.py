@@ -561,7 +561,8 @@ def provider_claude(cfg):
                 res["error"] = f"API エラー {e.code}"
             return res
         except Exception as e:
-            res["error"] = f"取得失敗: {str(e)[:150]}"
+            # 例外文にローカルパス等が混じる場合に備え、秘匿・マスクしてから切り詰める。
+            res["error"] = f"取得失敗: {mask_path(redact_text(str(e)))[:150]}"
             return res
         with claude_lock:
             _claude_cache["ts"] = time.time()
@@ -683,7 +684,11 @@ def provider_antigravity(cfg):
 
     rc, out, err = run_cmd(cmd, timeout=60)
     if rc != 0 or not out.strip():
-        res["error"] = f"antigravity-usage 実行失敗: {(err or out).strip()[:200]}"
+        # 外部 CLI の stderr/stdout には email/token/パス等が混じり得る。エラー文は
+        # --probe / --once の正規化結果やトレイにも表示されるため、必ず秘匿・パスマスク
+        # してから(全文に適用後に)切り詰める。
+        detail = mask_path(redact_text((err or out).strip()))[:200]
+        res["error"] = f"antigravity-usage 実行失敗: {detail}"
         return res
     try:
         data = json.loads(out)
@@ -806,7 +811,8 @@ def collect(cfg):
         try:
             results.append(fn(cfg))
         except Exception as e:
-            results.append({"name": key, "ok": False, "error": f"内部エラー: {e}",
+            detail = mask_path(redact_text(str(e)))
+            results.append({"name": key, "ok": False, "error": f"内部エラー: {detail}",
                             "windows": [], "note": ""})
     return results
 
