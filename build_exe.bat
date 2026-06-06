@@ -1,0 +1,70 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+chcp 65001 >nul
+
+echo ============================================================
+echo  AI Usage Tray - Build EXE (PyInstaller)
+echo ============================================================
+echo.
+
+echo [1/4] Selecting Python 3.12 (3.14 is incompatible with PyInstaller here)...
+set "PY=py -3.12"
+%PY% --version
+if errorlevel 1 (
+  echo   [!] Python 3.12 not found. Falling back to default python.
+  echo   [!] If the built exe fails to launch, install 3.12:  winget install -e --id Python.Python.3.12
+  set "PY=python"
+)
+%PY% --version
+if errorlevel 1 goto NOPYTHON
+echo.
+
+echo [2/4] Creating isolated build venv (.venv312)...
+%PY% -m venv .venv312
+if errorlevel 1 goto PIPFAIL
+set "VPY=.venv312\Scripts\python.exe"
+echo.
+
+echo [3/4] Installing build dependencies...
+"%VPY%" -m pip install --upgrade pip
+"%VPY%" -m pip install -r requirements.txt pyinstaller
+if errorlevel 1 goto PIPFAIL
+echo.
+
+echo [4/4] Building AIUsageTray (onedir, no console window)...
+"%VPY%" -m PyInstaller --onedir --noconsole --clean --noconfirm --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ai_usage_tray.py
+if errorlevel 1 goto BUILDFAIL
+echo.
+
+echo   Copying config.json next to the exe (if present)...
+if exist config.json copy /Y config.json dist\AIUsageTray\config.json >nul
+
+echo.
+echo ============================================================
+echo  Done!  ->  dist\AIUsageTray\AIUsageTray.exe
+echo  Double-click that exe to run with NO terminal window.
+echo  (Keep the whole AIUsageTray folder together; config.json
+echo   lives next to the exe inside it.)
+echo ============================================================
+echo.
+pause
+goto END
+
+:NOPYTHON
+echo   [!] Python not found. Install from python.org and add to PATH.
+pause
+goto END
+
+:PIPFAIL
+echo   [!] Dependency install failed. See the messages above.
+pause
+goto END
+
+:BUILDFAIL
+echo   [!] Build failed. See the PyInstaller output above.
+pause
+goto END
+
+:END
+endlocal

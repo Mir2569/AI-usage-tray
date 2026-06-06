@@ -1,0 +1,7 @@
+{
+  "refresh_seconds": 300,
+  "enabled": { "claude": true, "codex": true, "antigravity": true },
+  "antigravity_models": [],
+  "antigravity_show_autocomplete": false,
+  "paths": { "antigravity_usage": "" }
+}
