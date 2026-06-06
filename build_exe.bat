@@ -25,9 +25,10 @@ if errorlevel 1 goto PIPFAIL
 set "VPY=.venv312\Scripts\python.exe"
 echo.
 
-echo [3/4] Installing build dependencies...
-"%VPY%" -m pip install --upgrade pip
-"%VPY%" -m pip install -r requirements.txt pyinstaller
+echo [3/4] Installing build dependencies (pinned for reproducible builds)...
+"%VPY%" -m pip install -r requirements-build.txt
+if errorlevel 1 goto PIPFAIL
+"%VPY%" -m pip install -r requirements.txt
 if errorlevel 1 goto PIPFAIL
 echo.
 

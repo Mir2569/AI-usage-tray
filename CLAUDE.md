@@ -68,7 +68,8 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
   ```
   winget install -e --id Python.Python.3.12       # 3.12 が無ければ
   py -3.12 -m venv .venv312
-  .venv312\Scripts\python -m pip install -r requirements.txt pyinstaller
+  .venv312\Scripts\python -m pip install -r requirements-build.txt   # pip/pyinstaller を固定（再現性）
+  .venv312\Scripts\python -m pip install -r requirements.txt
   .venv312\Scripts\python -m PyInstaller --onedir --noconsole --clean --noconfirm ^
       --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ai_usage_tray.py
   copy /Y config.json dist\AIUsageTray\config.json
