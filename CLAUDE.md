@@ -56,6 +56,7 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 
 ## Windows 固有の注意（ハマりどころ・対処済み）
 - **バッチファイル(.bat)は必ず ASCII のみで書く**。日本語を入れると cp932 コンソールで文字化けし、壊れたバイトをコマンドとして実行してしまう。日本語表示は Python 側に任せる。
+- **`.bat` の `echo` 内の `>` は必ず `^>` でエスケープする**。`echo Done -> dist\...\AIUsageTray.exe` のように書くと `>` がリダイレクトとして解釈され、**できたての exe を echo の文字列で上書き**してしまう（11 バイトの壊れた exe →「アプリが使用できません」）。Python バージョンは無関係なので注意（2026-06-06 に build_exe.bat で実際に踏んだ）。
 - `subprocess` の出力は **UTF-8 + errors="replace"** で読む（`run_cmd`）。既定の cp932 デコードだと `UnicodeDecodeError` でスレッドが落ちる。
 - PowerShell の実行ポリシーで `npx.ps1`/`npm.ps1` がブロックされることがある。回避: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`、または cmd を使う／`.cmd` を明示。
 - exe 化(凍結)時は `config.json` を **exe と同じフォルダ**から読む（`sys.frozen` 判定で `SCRIPT_DIR = dirname(sys.executable)`）。

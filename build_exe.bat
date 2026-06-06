@@ -41,7 +41,7 @@ if exist config.json copy /Y config.json dist\AIUsageTray\config.json >nul
 
 echo.
 echo ============================================================
-echo  Done!  ->  dist\AIUsageTray\AIUsageTray.exe
+echo  Done!  -^>  dist\AIUsageTray\AIUsageTray.exe
 echo  Double-click that exe to run with NO terminal window.
 echo  (Keep the whole AIUsageTray folder together; config.json
 echo   lives next to the exe inside it.)
