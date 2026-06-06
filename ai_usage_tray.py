@@ -309,9 +309,8 @@ def provider_codex(cfg):
     base = ts or now_utc()
     data_age = fmt_age(ts) if ts else "イベント時刻 不明"
     file_age = fmt_age(meta.get("file_mtime"))
-    source = mask_path(path)
     res["note"] = (
-        f"Codexデータ: {data_age} / ログ更新: {file_age} / 採用ログ: {source}"
+        f"Codexデータ: {data_age} / ログ更新: {file_age}"
     )
 
     def window_from(key, label):
