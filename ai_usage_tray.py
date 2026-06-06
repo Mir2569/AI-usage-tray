@@ -309,7 +309,7 @@ def run_cmd(cmd, timeout=30):
 
 def resolve_cmd(name, explicit=""):
     """実行可能なコマンドのパスを返す。見つからなければ None。
-    コマンドプリロード攻撃を防ぐため、PATH 環境変数のディレクトリのみを探索する。"""
+    コマンドプリロード攻撃を防ぐため、PATH 内の絶対パスのディレクトリのみを探索する。"""
     if explicit:
         if os.path.exists(explicit):
             return explicit
@@ -326,7 +326,7 @@ def resolve_cmd(name, explicit=""):
     path_env = os.environ.get("PATH", "")
     sep = ";" if os.name == "nt" else ":"
     for folder in path_env.split(sep):
-        folder = folder.strip('"')
+        folder = folder.strip().strip('"')
         if not folder or not os.path.isabs(folder):
             continue
         for ext in exts:
