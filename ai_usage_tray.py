@@ -130,7 +130,19 @@ def parse_dt(value):
             return dt
         except Exception:
             pass
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        # fromisoformat 失敗時(古い Python 等)の strptime フォールバック。
+        # Python 3.10 以下は ミリ秒(%f)付き ISO を fromisoformat で扱えないため %f 形式も用意。
+        # まず %z でTZオフセット付きのまま解釈し、オフセットを失わないようにする
+        # (Python 3.7+ の %z は Z / +0900 / +09:00 を解釈できる)。
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+        # TZ 指定が無い文字列のみ UTC とみなす
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
             try:
                 return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
             except Exception:
@@ -217,6 +229,11 @@ def resolve_cmd(name, explicit=""):
     if explicit:
         if os.path.exists(explicit):
             return explicit
+        # Windows では拡張子を省略して指定されることがあるので補完して再確認
+        if os.name == "nt":
+            for ext in (".cmd", ".exe", ".bat"):
+                if os.path.exists(explicit + ext):
+                    return explicit + ext
 
     exts = [""]
     if os.name == "nt":
@@ -659,6 +676,13 @@ PROVIDERS = [
     ("antigravity", provider_antigravity),
 ]
 
+# トレイメニュー等で使うプロバイダの表示名(キー→ラベル)
+PROVIDER_NAMES = {
+    "claude": "Claude",
+    "codex": "Codex",
+    "antigravity": "Antigravity",
+}
+
 
 def collect(cfg):
     results = []
@@ -783,14 +807,18 @@ def run_tray(cfg):
         print("pystray / Pillow が必要です:  pip install pystray Pillow", file=sys.stderr)
         sys.exit(1)
 
-    state = {"results": [], "lock": threading.Lock()}
+    state = {"results": [], "lock": threading.Lock(),
+             "remaining": None, "theme": _windows_is_light_theme()}
 
     def build_menu():
         items = []
         with state["lock"]:
             results = list(state["results"])
         if not results:
-            items.append(Item("取得中...", None, enabled=False))
+            pending = [PROVIDER_NAMES.get(key, key) for key, _ in PROVIDERS
+                       if cfg["enabled"].get(key, True)]
+            label = f"取得中... ({', '.join(pending)})" if pending else "取得中..."
+            items.append(Item(label, None, enabled=False))
         for r in results:
             header = r["name"] if r["ok"] else f"{r['name']} ⚠"
             items.append(Item(header, None, enabled=False))
@@ -819,6 +847,9 @@ def run_tray(cfg):
         with state["lock"]:
             state["results"] = results
         rem = min_remaining(results)
+        with state["lock"]:
+            state["remaining"] = rem
+            state["theme"] = _windows_is_light_theme()
         if icon is not None:
             with ui_lock:
                 icon.icon = make_icon_image(rem)
@@ -837,7 +868,11 @@ def run_tray(cfg):
                 parts.append(f"{r['name']}: {min(rems):.0f}%")
             else:
                 parts.append(f"{r['name']}: OK")
-        return "AI Usage  |  " + "   ".join(parts)
+        tip = "AI Usage  |  " + "   ".join(parts)
+        # Windows 通知領域のツールチップは 127 文字までしか表示されない。超過分を安全に切り詰める。
+        if len(tip) > 127:
+            tip = tip[:124] + "..."
+        return tip
 
     icon = pystray.Icon("ai_usage", make_icon_image(None), "AI Usage 取得中...", menu=build_menu())
 
@@ -849,7 +884,26 @@ def run_tray(cfg):
                 print(f"[worker] {e}", file=sys.stderr)
             time.sleep(max(30, int(cfg.get("refresh_seconds", 300))))
 
+    def theme_watcher():
+        # システムテーマ(ライト/ダーク)を短い間隔で監視し、変化したら
+        # 最後に描画した残量でアイコンを即時に作り直す(データ取得は待たない)。
+        while True:
+            time.sleep(3)
+            try:
+                theme = _windows_is_light_theme()
+                with state["lock"]:
+                    changed = theme != state["theme"]
+                    rem = state["remaining"]
+                    if changed:
+                        state["theme"] = theme
+                if changed:
+                    icon.icon = make_icon_image(rem)
+            except Exception as e:
+                print(f"[theme_watcher] {e}", file=sys.stderr)
+
     threading.Thread(target=worker, daemon=True).start()
+    if os.name == "nt":
+        threading.Thread(target=theme_watcher, daemon=True).start()
     icon.run()
 
 
