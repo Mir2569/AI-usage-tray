@@ -283,7 +283,21 @@ def find_latest_codex_event(sessions_dir, max_days=10):
     }
     if not os.path.isdir(sessions_dir):
         return None, None, None, meta
-    files = glob.glob(os.path.join(sessions_dir, "**", "rollout-*.jsonl"), recursive=True)
+    # 長期使用でセッションファイルが数万個に達しても重くならないよう、
+    # 直近 max_days 日分の YYYY/MM/DD ディレクトリだけを明示列挙する
+    # (全ツリーの再帰 glob を避ける)。
+    files = []
+    today = datetime.now().date()
+    for i in range(max_days + 1):  # TZ 差の取りこぼし防止に当日含め 1 日分多めに見る
+        day = today - timedelta(days=i)
+        day_dir = os.path.join(sessions_dir, f"{day.year:04d}",
+                               f"{day.month:02d}", f"{day.day:02d}")
+        if os.path.isdir(day_dir):
+            files.extend(glob.glob(os.path.join(day_dir, "rollout-*.jsonl")))
+    # 想定外のディレクトリ構造でも壊さないよう、日付列挙で 0 件のときだけ
+    # 従来の再帰 glob にフォールバックする。
+    if not files:
+        files = glob.glob(os.path.join(sessions_dir, "**", "rollout-*.jsonl"), recursive=True)
     if not files:
         return None, None, None, meta
     def get_mtime_safe(p):
