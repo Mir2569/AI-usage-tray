@@ -825,7 +825,8 @@ def run_tray(cfg):
         sys.exit(1)
 
     state = {"results": [], "lock": threading.Lock(),
-             "remaining": None, "theme": _windows_is_light_theme()}
+             "remaining": None, "theme": _windows_is_light_theme(),
+             "fetching": False, "pending": False}
 
     def show_settings(icon):
         def run_launcher():
@@ -839,7 +840,7 @@ def run_tray(cfg):
                 new_cfg = load_config()
                 cfg.clear()
                 cfg.update(new_cfg)
-                refresh(icon)
+                do_refresh(icon)
 
         threading.Thread(target=run_launcher, daemon=True).start()
 
@@ -849,7 +850,16 @@ def run_tray(cfg):
         items.append(Menu.SEPARATOR)
         with state["lock"]:
             results = list(state["results"])
-        if not results:
+            fetching = state["fetching"]
+        if fetching:
+            # 取得中は起動時と同様に「取得中」を出す。既存の結果行は残し、
+            # 直前データを見たまま更新を待てるようにする。
+            pending = [PROVIDER_NAMES.get(key, key) for key, _ in PROVIDERS
+                       if cfg["enabled"].get(key, True)]
+            label = f"🔄 取得中... ({', '.join(pending)})" if pending else "🔄 取得中..."
+            items.append(Item(label, None, enabled=False))
+            items.append(Menu.SEPARATOR)
+        elif not results:
             pending = [PROVIDER_NAMES.get(key, key) for key, _ in PROVIDERS
                        if cfg["enabled"].get(key, True)]
             label = f"取得中... ({', '.join(pending)})" if pending else "取得中..."
@@ -874,26 +884,65 @@ def run_tray(cfg):
                     items.append(Item("   " + r["note"][:120], None, enabled=False))
             items.append(Menu.SEPARATOR)
         items.append(Item("設定...", lambda icon, item: show_settings(icon)))
-        items.append(Item("今すぐ更新", lambda icon, item: refresh(icon)))
+        items.append(Item("今すぐ更新", lambda icon, item: threading.Thread(
+            target=do_refresh, args=(icon,), daemon=True).start()))
         items.append(Item("終了", lambda icon, item: icon.stop()))
         return Menu(*items)
 
-    def refresh(icon=None):
-        results = collect(cfg)
+    def _apply_ui(icon):
+        # 現在の state を元にアイコン/ツールチップ/メニューを再描画する。
+        # UI スレッド外から呼んでよい(ui_lock で直列化)。
+        if icon is None:
+            return
         with state["lock"]:
-            state["results"] = results
-        rem = min_remaining(results)
+            rem = state["remaining"]
+            results = list(state["results"])
+        with ui_lock:
+            icon.icon = make_icon_image(rem)
+            icon.title = build_tooltip(results)
+            icon.menu = build_menu()
+            icon.update_menu()
+
+    def do_refresh(icon=None):
+        # 取得処理は重い(API通信/サブプロセス)。必ず UI スレッド外で実行すること。
+        # 単一フライト + pending: 取得中に来た更新要求は取りこぼさず、完了後にもう一度
+        # 取得する。これにより設定保存直後の再取得が「実行中の(古い設定での)取得」に
+        # 飲み込まれて反映されない問題を防ぐ。
         with state["lock"]:
-            state["remaining"] = rem
-            state["theme"] = _windows_is_light_theme()
-        if icon is not None:
-            with ui_lock:
-                icon.icon = make_icon_image(rem)
-                icon.title = build_tooltip(results)
-                icon.menu = build_menu()
-                icon.update_menu()
+            if state["fetching"]:
+                state["pending"] = True   # 取得中の要求は完了後に消化
+                return
+            state["fetching"] = True
+            state["pending"] = False
+        _apply_ui(icon)            # 「取得中」を即時表示
+        try:
+            while True:
+                results = collect(cfg)
+                rem = min_remaining(results)
+                with state["lock"]:
+                    state["results"] = results
+                    state["remaining"] = rem
+                    state["theme"] = _windows_is_light_theme()
+                    # 停止判定とフラグ解除を同一ロック内で原子的に行い、取りこぼしを防ぐ。
+                    if state["pending"]:
+                        state["pending"] = False
+                        again = True
+                    else:
+                        state["fetching"] = False
+                        again = False
+                _apply_ui(icon)    # 結果(取得継続中なら中間結果)を反映
+                if not again:
+                    break
+        except BaseException:
+            with state["lock"]:
+                state["fetching"] = False
+                state["pending"] = False
+            _apply_ui(icon)
+            raise
 
     def build_tooltip(results):
+        with state["lock"]:
+            fetching = state["fetching"]
         parts = []
         for r in results:
             if not r["ok"]:
@@ -905,7 +954,8 @@ def run_tray(cfg):
             else:
                 parts.append(f"{r['name']}: OK")
         # 各プロバイダを改行で区切り、ホバー時に縦並びで見やすく表示する。
-        tip = "AI Usage\n" + "\n".join(parts)
+        head = "AI Usage（取得中...）" if fetching else "AI Usage"
+        tip = head + "\n" + "\n".join(parts)
         # Windows 通知領域のツールチップは 127 文字までしか表示されない。超過分を安全に切り詰める。
         if len(tip) > 127:
             tip = tip[:124] + "..."
@@ -916,7 +966,7 @@ def run_tray(cfg):
     def worker():
         while True:
             try:
-                refresh(icon)
+                do_refresh(icon)
             except Exception as e:
                 print(f"[worker] {e}", file=sys.stderr)
             time.sleep(max(30, int(cfg.get("refresh_seconds", 300))))
