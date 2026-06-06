@@ -6,5 +6,9 @@
   "antigravity_show_autocomplete": false,
   "antigravity_npx_fallback": false,
   "antigravity_usage_version": "0.2.9",
+  "wsl": {
+    "distro": "",
+    "enabled": { "claude": false, "codex": false, "antigravity": false }
+  },
   "paths": { "antigravity_usage": "" }
 }
