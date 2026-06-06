@@ -96,10 +96,10 @@ gh pr view <PR> --json number,headRefName,headRepositoryOwner,headRepository,url
 gh pr diff <PR>
 ```
 
-正確な行番号が要るときは PR head の実ファイルを取得して数えます。
+正確な行番号が要るときは PR head の実ファイルを取得して数えます（`Accept: application/vnd.github.raw` で base64 ではなく生内容が返るため、PowerShell でもそのまま保存できます）。
 
 ```powershell
-gh api "repos/<owner>/<repo>/contents/<path>?ref=<headRef>" --jq .content | base64 -d > scratch\head_file.txt
+gh api "repos/<owner>/<repo>/contents/<path>?ref=<headRef>" -H "Accept: application/vnd.github.raw" > scratch\head_file.txt
 ```
 
 ### 2. レビュー JSON を `scratch/` に作る
