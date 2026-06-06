@@ -11,6 +11,8 @@
 - PR 作成: `.agents/skills/pr/SKILL.md`
 - レビュー: `.agents/skills/review/SKILL.md`
 
+Claude Code では、これらと同内容のスキルを `.claude/skills/`（正本）から自動検出し、`/github-issue`・`/github-pr`・`/github-review` として使えます。両者は同期させること（詳細は `.claude/skills/README.md`）。GitHub PR のレビューは、指摘を該当行へインラインコメントで投稿するのを既定とします。
+
 ## 基本方針
 
 - やり取り、PR 本文、レビューコメント、開発メモは基本的に日本語で書く。
