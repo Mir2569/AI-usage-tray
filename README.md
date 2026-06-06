@@ -54,6 +54,8 @@ python ai_usage_tray.py --probe-raw # 上記に加えて外部CLIの生出力も
 - **Codex**: 追加インストール不要。Codex で一度メッセージを送るとセッションログが作られ、そこから読みます。
 - **Antigravity**: `antigravity-usage`（npm）が必要。**既定では未導入時に何もしません**（`npm i -g antigravity-usage` での導入を推奨）。`config.json` で `antigravity_npx_fallback: true` にすると、未導入時に `npx -y antigravity-usage@<版>` で取得します（後述の注意あり）。Antigravity の **IDE が起動していれば**ローカル接続で取得できます。
 
+WSL 上で AI ツールを使っている場合は、設定で provider ごとに WSL 側の認証情報・セッションログ・CLI を参照できます。設定を追加しない限り、従来どおり Windows 側のデータソースを使います。
+
 ---
 
 ## 必要なもの
@@ -105,7 +107,26 @@ python ai_usage_tray.py --probe-raw # 上記に加えて外部CLIの生出力も
 - `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。Antigravity のモデルは残量・リセット時刻が一致する**共通枠**ごとに自動でまとめて1行表示されます（例 `Gemini 3 (共通枠)` / `Claude / GPT-OSS (共通枠)`）。
 - `antigravity_npx_fallback`: `antigravity-usage` が未検出のとき `npx` 経由で取得するか（**既定 false = opt-in**）。⚠ 有効にすると、常駐アプリがバックグラウンドで（既定5分ごとや初回・キャッシュ切れ時に）**npm からパッケージを取得・実行**します。気になる場合は無効のまま `npm i -g antigravity-usage` で導入するか、`paths.antigravity_usage` で実行ファイルを明示してください。
 - `antigravity_usage_version`: 上記 npx フォールバック時に使う固定バージョン（既定 `"0.2.9"`）。空文字にすると無印（最新）になりますが、サプライチェーンの観点から**非推奨**です。
+- `wsl.distro`: WSL のディストリビューション名。空文字なら Windows 側 `wsl.exe` の既定ディストリビューションを使います。既定は `wsl -l -v` で `*` が付いている distro です（例: `"Ubuntu-24.04"`）。解決できる場合、メニューや診断の `WSL:` 表示には実際の distro 名が出ます。
+- `wsl.enabled`: provider ごとに WSL 側のデータソースを使うか。`claude` は WSL 側 `~/.claude/.credentials.json`、`codex` は WSL 側 `~/.codex/sessions`、`antigravity` は WSL 側の Linux コマンドとして実行できる `antigravity-usage --json` を使います。
 - `paths.antigravity_usage`: `antigravity-usage` を自動検出できない場合に実行ファイルのフルパスを指定。
+
+WSL 側を使う設定例:
+
+```json
+{
+  "wsl": {
+    "distro": "Ubuntu-24.04",
+    "enabled": { "claude": true, "codex": true, "antigravity": true }
+  }
+}
+```
+
+WSL 側を参照する provider では、WSL 側に `python3` が必要です。Ubuntu 24.04 などの標準的な distro では通常インストール済みです。常駐アプリは停止中の WSL distro を自動起動しないため、値が出ない場合は先に `wsl -d Ubuntu-24.04` などで対象 distro を起動してください。
+
+WSL 側で Antigravity を取得する場合も、既定では WSL 側に Linux 版の `antigravity-usage` が必要です。Windows 側 npm の shim ではなく、WSL 内で `npm i -g antigravity-usage` してください。`antigravity_npx_fallback: true` を有効化すると WSL 側の Linux 版 `npx -y antigravity-usage@<版>` にフォールバックします。
+
+Claude の WSL 側トークンは、通常は WSL 側 `~/.claude/.credentials.json` から読みます。環境変数 `CLAUDE_CODE_OAUTH_TOKEN` だけで使う場合は、WSL 側 `~/.profile` に `export CLAUDE_CODE_OAUTH_TOKEN=...` を置いてください。`~/.bashrc` だけに置いた値は取得されません。
 
 ---
 
@@ -135,6 +156,7 @@ python ai_usage_tray.py --probe
 - **Codex が出ない** → Codex で一度メッセージを送るとセッションログが作られます。
 - **Codex の値が古く見える** → Codex はセッションログの `rate_limits` 由来です。Codex 側が新しい `rate_limits` を書くまで値自体は変わりません。トレイメニューや `--probe` の `Codexデータ` / `ログ更新` を見て、採用データの鮮度を確認してください。
 - **Antigravity が出ない** → Antigravity の IDE を一度起動してから再取得（ローカルサーバが立ちます）。
+- **WSL 側の値が出ない** → 対象 distro が起動しているか、`wsl.distro` の名前、WSL 側の `python3` / `~/.claude/.credentials.json` / `~/.codex/sessions` / `antigravity-usage` の有無を `python ai_usage_tray.py --probe` で確認してください。
 
 ---
 
@@ -142,7 +164,7 @@ python ai_usage_tray.py --probe
 
 - トレイアイコンを右クリック → 各ツールの残り%・リセット時刻
 - 「ヘルプ」: 色と残量の対応表・使い方の要約・GitHub / X（作者）へのリンク
-- 「設定...」: プロバイダの有効化、更新間隔、配色モードなどを変更
+- 「設定...」: プロバイダの有効化、更新間隔、WSL データソース、配色モードなどを変更
 - 「今すぐ更新」: 即時再取得
 - 「終了」: 常駐を終了
 

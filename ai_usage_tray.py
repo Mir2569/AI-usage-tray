@@ -60,6 +60,8 @@ def mask_path(path):
     s = str(path).replace(HOME, "~")
     # C:\Users\<名前> / C:/Users/<名前> 等(ドライブ・区切り・大小文字を問わず)
     s = re.sub(r"([A-Za-z]:[\\/]+Users[\\/]+)[^\\/]+", r"\1***", s, flags=re.IGNORECASE)
+    s = re.sub(r"(/home/)[^/]+", r"\1***", s)
+    s = re.sub(r"(/mnt/[A-Za-z]/Users/)[^/]+", r"\1***", s, flags=re.IGNORECASE)
     user = os.environ.get("USERNAME") or os.environ.get("USER")
     if user:
         s = re.sub(re.escape(user), "***", s, flags=re.IGNORECASE)
@@ -132,6 +134,12 @@ DEFAULT_CONFIG = {
     # npx フォールバック時に使う antigravity-usage の固定バージョン。
     # 空文字にすると無印(最新)になるが、サプライチェーンの観点から非推奨。
     "antigravity_usage_version": "0.2.9",
+    # WSL 側のデータソースを provider ごとに使う設定。distro 空欄なら既定 distro。
+    # enabled を有効化した provider だけ、WSL 内の credentials / sessions / CLI を参照する。
+    "wsl": {
+        "distro": "",
+        "enabled": {"claude": False, "codex": False, "antigravity": False},
+    },
     # コマンドの明示パス(自動検出に失敗する場合のみ設定)
     "paths": {"antigravity_usage": ""},
 }
@@ -334,6 +342,181 @@ def resolve_cmd(name, explicit=""):
     return None
 
 
+def _provider_uses_wsl(cfg, provider):
+    """provider のデータソースを WSL 側へ切り替えるかを返す。"""
+    if os.name != "nt":
+        return False
+    wsl_cfg = cfg.get("wsl", {})
+    if not isinstance(wsl_cfg, dict):
+        return False
+    enabled = wsl_cfg.get("enabled", {})
+    if isinstance(enabled, dict):
+        return bool(enabled.get(provider, False))
+    return bool(enabled)
+
+
+def _wsl_distro(cfg):
+    wsl_cfg = cfg.get("wsl", {})
+    if not isinstance(wsl_cfg, dict):
+        return ""
+    return str(wsl_cfg.get("distro", "") or "").strip()
+
+
+_wsl_default_cache = {"ts": 0.0, "name": ""}
+
+
+def _wsl_default_distro_name():
+    cached = _wsl_default_cache.get("name", "")
+    if cached and (time.time() - _wsl_default_cache.get("ts", 0.0)) < 30:
+        return cached
+    exe = _resolve_wsl_exe()
+    if not exe:
+        return ""
+    rc, out, err = run_cmd([exe, "-l", "-v"], timeout=3)
+    if rc != 0:
+        return ""
+    for line in _wsl_output_lines(out):
+        if not line.startswith("*"):
+            continue
+        parts = line[1:].strip().split()
+        if parts:
+            name = parts[0]
+            _wsl_default_cache["ts"] = time.time()
+            _wsl_default_cache["name"] = name
+            return name
+    return ""
+
+
+def _wsl_label(cfg):
+    distro = _wsl_distro(cfg)
+    if distro:
+        return f"WSL:{distro}"
+    default_distro = _wsl_default_distro_name()
+    return f"WSL:{default_distro}" if default_distro else "WSL:既定"
+
+
+def _wsl_default_help_text():
+    default_distro = _wsl_default_distro_name()
+    if default_distro:
+        return f"  WSL既定: {default_distro} (*付きdistro)"
+    return "  WSL既定: wsl -l -v の * が付くdistro"
+
+
+def _wsl_distro_blank_help_text():
+    default_distro = _wsl_default_distro_name()
+    if default_distro:
+        return f"  Distro空欄時は {default_distro} を使用"
+    return "  WSL Distro空欄時にその既定を使用"
+
+
+def _shell_quote(value):
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def _resolve_wsl_exe():
+    exe = resolve_cmd("wsl")
+    if not exe and os.name == "nt":
+        windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows"
+        for candidate in (os.path.join(windir, "Sysnative", "wsl.exe"),
+                          os.path.join(windir, "System32", "wsl.exe")):
+            if os.path.isfile(candidate):
+                exe = candidate
+                break
+    return exe
+
+
+def _wsl_output_lines(text):
+    # wsl.exe -l 系は環境により NUL 混じりで見えることがあるため、表示用に正規化する。
+    text = (text or "").replace("\x00", "")
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _wsl_running_status(cfg):
+    exe = _resolve_wsl_exe()
+    if not exe:
+        return False, "wsl.exe が見つかりません。WSL を有効化してから再実行してください。"
+    rc, out, err = run_cmd([exe, "--list", "--running", "--quiet"], timeout=3)
+    if rc != 0:
+        detail = mask_path(redact_text((err or out).strip()))[:150]
+        return False, f"WSL の起動状態を確認できませんでした: {detail or '不明なエラー'}"
+    running = _wsl_output_lines(out)
+    distro = _wsl_distro(cfg)
+    if distro:
+        if any(line.lower() == distro.lower() for line in running):
+            return True, ""
+        return False, f"WSL ディストリビューション '{distro}' が起動していません。`wsl -d {distro}` で起動してから再取得してください。"
+    default_distro = _wsl_default_distro_name()
+    if default_distro:
+        if any(line.lower() == default_distro.lower() for line in running):
+            return True, ""
+        return False, f"WSL 既定ディストリビューション '{default_distro}' が起動していません。`wsl -d {default_distro}` で起動してから再取得してください。"
+    if running:
+        return False, "WSL 既定ディストリビューションを確認できませんでした。`wsl -l -v` で既定を確認してください。"
+    return False, "WSL 既定ディストリビューションが起動していません。WSL を起動してから再取得してください。"
+
+
+def _wsl_linux_command_path(cfg, name):
+    if not re.fullmatch(r"[0-9A-Za-z._-]+", name or ""):
+        return None
+    script = f'command -v {_shell_quote(name)} 2>/dev/null | head -n 1'
+    rc, out, err = run_wsl_sh(cfg, script, timeout=5)
+    if rc != 0:
+        return None
+    path = (out or "").strip().splitlines()
+    if not path:
+        return None
+    path = path[0].strip()
+    if re.match(r"^/mnt/[A-Za-z]/", path):
+        return None
+    return path or None
+
+
+def _wsl_linux_command_exists(cfg, name):
+    return _wsl_linux_command_path(cfg, name) is not None
+
+
+def build_wsl_cmd(cfg, args):
+    """wsl.exe 経由で WSL 内コマンドを実行する argv を組み立てる。"""
+    exe = _resolve_wsl_exe()
+    if not exe:
+        return None
+    cmd = [exe]
+    distro = _wsl_distro(cfg)
+    if distro:
+        cmd.extend(["-d", distro])
+    cmd.append("--")
+    cmd.extend(args)
+    return cmd
+
+
+def run_wsl_sh(cfg, script, timeout=30):
+    cmd = build_wsl_cmd(cfg, ["sh", "-lc", script])
+    if not cmd:
+        return 127, "", "wsl.exe が見つかりません。"
+    return run_cmd(cmd, timeout=timeout)
+
+
+def run_wsl_cmd(cfg, args, timeout=30):
+    cmd = build_wsl_cmd(cfg, args)
+    if not cmd:
+        return 127, "", "wsl.exe が見つかりません。"
+    return run_cmd(cmd, timeout=timeout)
+
+
+def _wsl_path_exists(cfg, test_flag, path_expr):
+    if test_flag not in ("-f", "-d", "-e"):
+        return False
+    path = str(path_expr).strip('"')
+    if path.startswith("$HOME/"):
+        script = f'p="$HOME"/{_shell_quote(path[len("$HOME/"):])}; test {test_flag} "$p"'
+    elif path.startswith("~/"):
+        script = f'p="$HOME"/{_shell_quote(path[2:])}; test {test_flag} "$p"'
+    else:
+        script = f'test {test_flag} {_shell_quote(path)}'
+    rc, out, err = run_wsl_sh(cfg, script, timeout=5)
+    return rc == 0
+
+
 # ---------------------------------------------------------------------------
 # 正規化された結果の型(辞書ベース)
 #   window = {label, used_pct, remaining_pct, reset_at, detail}
@@ -446,20 +629,151 @@ def find_latest_codex_event(sessions_dir, max_days=10):
     return best["rate_limits"], best["timestamp"], best["path"], meta
 
 
+def find_latest_codex_event_wsl(cfg, max_days=10):
+    """WSL 側の ~/.codex/sessions から最新の rate_limits イベントを返す。"""
+    meta = {
+        "candidate_files": 0,
+        "scanned_files": 0,
+        "rate_limit_events": 0,
+        "file_mtime": None,
+        "line_number": None,
+        "sessions_exists": False,
+        "error": None,
+    }
+    code = r'''
+import datetime
+import json
+import os
+import sys
+import time
+
+max_days = int(sys.argv[1])
+sessions = os.path.expanduser("~/.codex/sessions")
+result = {
+    "ok": False,
+    "sessions_exists": os.path.isdir(sessions),
+    "candidate_files": 0,
+    "scanned_files": 0,
+    "rate_limit_events": 0,
+    "file_mtime": None,
+    "line_number": None,
+    "timestamp": None,
+    "path": None,
+    "rate_limits": None,
+}
+if not result["sessions_exists"]:
+    print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0)
+
+files = []
+for root, dirs, names in os.walk(sessions):
+    dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+    for name in names:
+        if name.startswith("rollout-") and name.endswith(".jsonl"):
+            path = os.path.join(root, name)
+            try:
+                files.append((path, os.stat(path).st_mtime))
+            except OSError:
+                pass
+files.sort(key=lambda item: item[1], reverse=True)
+cutoff = time.time() - max_days * 86400
+best = None
+best_key = None
+event_seq = 0
+for path, mtime in files:
+    if mtime < cutoff:
+        break
+    result["candidate_files"] += 1
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            result["scanned_files"] += 1
+            for line_no, line in enumerate(f, start=1):
+                if "rate_limits" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                payload = rec.get("payload", rec)
+                if not isinstance(payload, dict):
+                    continue
+                rl = payload.get("rate_limits")
+                if not rl:
+                    continue
+                ts = rec.get("timestamp")
+                result["rate_limit_events"] += 1
+                event_seq += 1
+                try:
+                    event_epoch = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    event_epoch = mtime
+                key = (event_epoch, mtime, event_seq)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best = {
+                        "rate_limits": rl,
+                        "timestamp": ts,
+                        "path": path,
+                        "file_mtime": mtime,
+                        "line_number": line_no,
+                    }
+    except Exception:
+        continue
+if best:
+    result.update(best)
+    result["ok"] = True
+print(json.dumps(result, ensure_ascii=False))
+'''
+    rc, out, err = run_wsl_cmd(cfg, ["python3", "-c", code, str(max_days)], timeout=30)
+    if rc != 0:
+        meta["error"] = mask_path(redact_text((err or out).strip()))[:200]
+        return None, None, None, meta
+    try:
+        data = json.loads(out)
+    except Exception:
+        meta["error"] = "WSL 側 Codex セッションの診断結果を解釈できませんでした。"
+        return None, None, None, meta
+    meta["sessions_exists"] = bool(data.get("sessions_exists"))
+    meta["candidate_files"] = int(data.get("candidate_files") or 0)
+    meta["scanned_files"] = int(data.get("scanned_files") or 0)
+    meta["rate_limit_events"] = int(data.get("rate_limit_events") or 0)
+    mtime = data.get("file_mtime")
+    meta["file_mtime"] = datetime.fromtimestamp(float(mtime), tz=timezone.utc) if mtime else None
+    meta["line_number"] = data.get("line_number")
+    if not data.get("ok"):
+        return None, None, None, meta
+    return data.get("rate_limits"), parse_dt(data.get("timestamp")), data.get("path"), meta
+
+
 def provider_codex(cfg):
     res = {"name": "Codex", "ok": False, "error": None, "windows": [], "note": ""}
-    sessions_dir = os.path.join(HOME, ".codex", "sessions")
     max_days = int(cfg.get("codex_max_days", 10))
-    rl, ts, path, meta = find_latest_codex_event(sessions_dir, max_days=max_days)
+    use_wsl = _provider_uses_wsl(cfg, "codex")
+    if use_wsl:
+        ready, message = _wsl_running_status(cfg)
+        if not ready:
+            res["error"] = message
+            return res
+        if not _wsl_linux_command_exists(cfg, "python3"):
+            res["error"] = f"{_wsl_label(cfg)} に Linux 側 python3 が見つかりません。WSL 側で python3 をインストールしてください。"
+            return res
+        rl, ts, path, meta = find_latest_codex_event_wsl(cfg, max_days=max_days)
+    else:
+        sessions_dir = os.path.join(HOME, ".codex", "sessions")
+        rl, ts, path, meta = find_latest_codex_event(sessions_dir, max_days=max_days)
     if rl is None:
-        res["error"] = "セッションデータが見つかりません (~/.codex/sessions)。Codexで一度メッセージを送ると生成されます。"
+        if use_wsl and meta.get("error"):
+            res["error"] = f"WSL 側 Codex セッション確認に失敗しました: {meta['error']}"
+        elif use_wsl:
+            res["error"] = f"セッションデータが見つかりません ({_wsl_label(cfg)} ~/.codex/sessions)。Codexで一度メッセージを送ると生成されます。"
+        else:
+            res["error"] = "セッションデータが見つかりません (~/.codex/sessions)。Codexで一度メッセージを送ると生成されます。"
         return res
     base = ts or now_utc()
     data_age = fmt_age(ts) if ts else "イベント時刻 不明"
     file_age = fmt_age(meta.get("file_mtime"))
-    res["note"] = (
-        f"Codexデータ: {data_age} / ログ更新: {file_age}"
-    )
+    source = f"{_wsl_label(cfg)} / " if use_wsl else ""
+    res["note"] = f"{source}Codexデータ: {data_age} / ログ更新: {file_age}"
 
     def window_from(key, label):
         d = rl.get(key)
@@ -511,19 +825,14 @@ def provider_codex(cfg):
 # Provider: Claude Code  (公式 OAuth usage API)
 # ---------------------------------------------------------------------------
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-_claude_cache = {"ts": 0.0, "data": None}
+_claude_cache = {"ts": 0.0, "data": None, "source": None}
 claude_lock = threading.Lock()
 ui_lock = threading.Lock()
 
 
-def _read_claude_token():
-    """~/.claude/.credentials.json から OAuth アクセストークンと有効期限(epoch ms)を読む。"""
-    path = os.path.join(HOME, ".claude", ".credentials.json")
+def _read_claude_token_from_json(text):
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        return None, None
+        data = json.loads(text)
     except Exception:
         return None, None
     oauth = data.get("claudeAiOauth") or data.get("claude_ai_oauth") or {}
@@ -533,8 +842,57 @@ def _read_claude_token():
     return None, None
 
 
-def _claude_code_version():
+def _read_claude_token(cfg=None):
+    """~/.claude/.credentials.json から OAuth アクセストークンと有効期限(epoch ms)を読む。"""
+    if cfg and _provider_uses_wsl(cfg, "claude"):
+        code = (
+            'import os, sys; '
+            'path=os.path.expanduser("~/.claude/.credentials.json"); '
+            'sys.stdout.write(open(path, encoding="utf-8").read()) if os.path.isfile(path) else sys.exit(2)'
+        )
+        rc, out, err = run_wsl_cmd(cfg, ["python3", "-c", code], timeout=15)
+        if rc != 0:
+            return None, None
+        return _read_claude_token_from_json(out)
+
+    path = os.path.join(HOME, ".claude", ".credentials.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return None, None
+    except Exception:
+        return None, None
+    return _read_claude_token_from_json(text)
+
+
+def _read_claude_env_token_wsl(cfg):
+    script = (
+        'token="${CLAUDE_CODE_OAUTH_TOKEN:-}"; '
+        'if [ -z "$token" ] && [ -r "$HOME/.profile" ]; then '
+        '. "$HOME/.profile" >/dev/null 2>/dev/null || true; '
+        'token="${CLAUDE_CODE_OAUTH_TOKEN:-}"; '
+        'fi; '
+        'printf "%s" "$token"'
+    )
+    rc, out, err = run_wsl_sh(cfg, script, timeout=10)
+    if rc == 0 and out.strip():
+        return out.strip()
+    return None
+
+
+def _claude_code_version(cfg=None):
     """User-Agent 用に claude のバージョンを取得(取れなければ既定値)。"""
+    if cfg and _provider_uses_wsl(cfg, "claude"):
+        exe = _wsl_linux_command_path(cfg, "claude")
+        if exe:
+            rc, out, err = run_wsl_cmd(cfg, [exe, "--version"], timeout=15)
+            if rc == 0:
+                m = re.search(r"(\d+\.\d+\.\d+)", out or "")
+                if m:
+                    return m.group(1)
+        return "2.0.0"
+
     exe = resolve_cmd("claude")
     if exe:
         rc, out, err = run_cmd([exe, "--version"], timeout=15)
@@ -547,19 +905,34 @@ def _claude_code_version():
 
 def provider_claude(cfg):
     res = {"name": "Claude Code", "ok": False, "error": None, "windows": [], "note": ""}
+    use_wsl = _provider_uses_wsl(cfg, "claude")
+    source = _wsl_label(cfg) if use_wsl else "Windows"
+    if use_wsl:
+        ready, message = _wsl_running_status(cfg)
+        if not ready:
+            res["error"] = message
+            return res
+        if not _wsl_linux_command_exists(cfg, "python3"):
+            res["error"] = f"{_wsl_label(cfg)} に Linux 側 python3 が見つかりません。WSL 側で python3 をインストールしてください。"
+            return res
 
     # レート制限(429)回避のため API レスポンスを 90 秒キャッシュ
     data = None
     with claude_lock:
-        if _claude_cache["data"] is not None and (time.time() - _claude_cache["ts"]) < 90:
+        if (_claude_cache["data"] is not None
+                and _claude_cache.get("source") == source
+                and (time.time() - _claude_cache["ts"]) < 90):
             data = _claude_cache["data"]
 
     if data is None:
-        token, expires_at = _read_claude_token()
+        token, expires_at = _read_claude_token(cfg)
         if not token:
-            token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+            token = _read_claude_env_token_wsl(cfg) if use_wsl else os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
         if not token:
-            res["error"] = "認証情報が見つかりません (~/.claude/.credentials.json)。Claude Code にログインしてください。"
+            if use_wsl:
+                res["error"] = f"認証情報が見つかりません ({_wsl_label(cfg)} ~/.claude/.credentials.json)。WSL 側の Claude Code にログインしてください。"
+            else:
+                res["error"] = "認証情報が見つかりません (~/.claude/.credentials.json)。Claude Code にログインしてください。"
             return res
 
         # トークンの有効期限(epoch ms)が分かっていて既に過去なら、API を叩く前に
@@ -574,7 +947,7 @@ def provider_claude(cfg):
 
         import urllib.request
         import urllib.error
-        ver = _claude_code_version()
+        ver = _claude_code_version(cfg)
         req = urllib.request.Request(CLAUDE_USAGE_URL, headers={
             "Authorization": f"Bearer {token}",
             "anthropic-beta": "oauth-2025-04-20",
@@ -599,6 +972,7 @@ def provider_claude(cfg):
         with claude_lock:
             _claude_cache["ts"] = time.time()
             _claude_cache["data"] = data
+            _claude_cache["source"] = source
 
     def win(key, label):
         d = data.get(key)
@@ -628,6 +1002,8 @@ def provider_claude(cfg):
     res["ok"] = bool(res["windows"])
     if not res["ok"]:
         res["error"] = "使用量データが空でした(現在アクティブな枠なし)。"
+    elif use_wsl:
+        res["note"] = _wsl_label(cfg)
     return res
 
 
@@ -691,10 +1067,35 @@ def _walk_find_models(obj, found, parent_key=None, depth=0):
             _walk_find_models(v, found, parent_key=parent_key, depth=depth + 1)
 
 
+def _antigravity_npx_pkg(cfg):
+    version = str(cfg.get("antigravity_usage_version", "") or "").strip()
+    if version and not re.fullmatch(r"[0-9A-Za-z._-]+", version):
+        version = DEFAULT_CONFIG["antigravity_usage_version"]
+    return f"antigravity-usage@{version}" if version else "antigravity-usage"
+
+
 def build_antigravity_cmd(cfg):
     """antigravity-usage 実行コマンドを決める。返り値は (cmd or None, reason)。
     cmd が None のとき reason に理由(ユーザー向けメッセージ)を入れる。"""
-    exe = resolve_cmd("antigravity-usage", cfg["paths"].get("antigravity_usage", ""))
+    if _provider_uses_wsl(cfg, "antigravity"):
+        if not _resolve_wsl_exe():
+            return None, "wsl.exe が見つかりません。WSL を有効化してから再実行してください。"
+        fallback = bool(cfg.get("antigravity_npx_fallback", False))
+        pkg = _antigravity_npx_pkg(cfg)
+        exe = _wsl_linux_command_path(cfg, "antigravity-usage")
+        if exe:
+            return build_wsl_cmd(cfg, [exe, "--json"]), None
+        if fallback:
+            npx = _wsl_linux_command_path(cfg, "npx")
+            if npx:
+                return build_wsl_cmd(cfg, [npx, "-y", pkg, "--json"]), None
+            return None, "Linux 側の antigravity-usage も npx も見つかりません。WSL 側で npm i -g antigravity-usage を実行してください。"
+        return None, "Linux 側の antigravity-usage が見つかりません。WSL 側で npm i -g antigravity-usage を実行するか、antigravity_npx_fallback を有効化してください。"
+
+    paths_cfg = cfg.get("paths", {})
+    if not isinstance(paths_cfg, dict):
+        paths_cfg = {}
+    exe = resolve_cmd("antigravity-usage", paths_cfg.get("antigravity_usage", ""))
     if exe:
         return [exe, "--json"], None
     # ローカルに見つからない場合の npx フォールバック。常駐アプリが裏で npm から
@@ -706,13 +1107,18 @@ def build_antigravity_cmd(cfg):
     if not npx:
         return None, "antigravity-usage も npx も見つかりません。`npm i -g antigravity-usage` を実行してください。"
     # 版固定でサプライチェーンリスクを抑える(空なら無印=最新だが非推奨)。
-    version = str(cfg.get("antigravity_usage_version", "") or "").strip()
-    pkg = f"antigravity-usage@{version}" if version else "antigravity-usage"
+    pkg = _antigravity_npx_pkg(cfg)
     return [npx, "-y", pkg, "--json"], None
 
 
 def provider_antigravity(cfg):
     res = {"name": "Antigravity", "ok": False, "error": None, "windows": [], "note": ""}
+    use_wsl = _provider_uses_wsl(cfg, "antigravity")
+    if use_wsl:
+        ready, message = _wsl_running_status(cfg)
+        if not ready:
+            res["error"] = message
+            return res
     cmd, reason = build_antigravity_cmd(cfg)
     if not cmd:
         res["error"] = reason
@@ -813,6 +1219,8 @@ def provider_antigravity(cfg):
 
     if res["windows"]:
         res["ok"] = True
+        if use_wsl:
+            res["note"] = _wsl_label(cfg)
     else:
         res["error"] = "モデルを抽出できませんでした(--probe で生データ確認)。"
     return res
@@ -1011,6 +1419,8 @@ def run_tray(cfg):
             Item(f"  自動更新: {interval}秒ごと", None, enabled=False),
             Item("  数字は一番余裕のない枠の残り%", None, enabled=False),
             Item("  配色は「設定...」で切替", None, enabled=False),
+            Item(_wsl_default_help_text(), None, enabled=False),
+            Item(_wsl_distro_blank_help_text(), None, enabled=False),
             Item("  不調時は --probe で診断", None, enabled=False),
             Menu.SEPARATOR,
             Item("GitHub を開く", lambda icon, item: webbrowser.open(GITHUB_URL)),
@@ -1196,17 +1606,47 @@ def run_probe(cfg, show_raw=False):
         print("（外部 CLI の生出力は既定で非表示です。必要なら --probe-raw を使ってください。）")
         print("（出力を Issue/PR に貼る前に、機密やローカル情報が無いか確認してください。）")
     print(f"HOME = {mask_path(HOME)}")
+    wsl_ready, wsl_message = _wsl_running_status(cfg)
+    print(f"wsl.exe           : {mask_path(_resolve_wsl_exe())}")
+    print(f"WSL distro        : {_wsl_distro(cfg) or '(既定)'}")
+    print(f"WSL running       : {wsl_ready} {('- ' + wsl_message) if not wsl_ready else ''}")
+    wsl_enabled = cfg.get("wsl", {}).get("enabled", {}) if isinstance(cfg.get("wsl", {}), dict) else {}
+    if isinstance(wsl_enabled, dict):
+        enabled_text = ", ".join(f"{PROVIDER_NAMES.get(k, k)}={bool(wsl_enabled.get(k, False))}"
+                                 for k, _fn in PROVIDERS)
+    else:
+        enabled_text = str(bool(wsl_enabled))
+    print(f"WSL enabled       : {enabled_text}")
     print(f"claude            : {mask_path(resolve_cmd('claude'))}")
-    print(f"antigravity-usage : {mask_path(resolve_cmd('antigravity-usage', cfg['paths'].get('antigravity_usage','')))}")
+    paths_cfg = cfg.get("paths", {})
+    if not isinstance(paths_cfg, dict):
+        paths_cfg = {}
+    print(f"antigravity-usage : {mask_path(resolve_cmd('antigravity-usage', paths_cfg.get('antigravity_usage','')))}")
     print(f"npx               : {mask_path(resolve_cmd('npx'))}")
     print()
 
     # Codex 生データ
-    sessions_dir = os.path.join(HOME, ".codex", "sessions")
+    codex_uses_wsl = _provider_uses_wsl(cfg, "codex")
     codex_max_days = int(cfg.get("codex_max_days", 10))
-    print(f"[Codex] sessions dir exists: {os.path.isdir(sessions_dir)}  ({mask_path(sessions_dir)})")
+    if codex_uses_wsl:
+        print(f"[Codex] source: {_wsl_label(cfg)}")
+        if not wsl_ready:
+            rl, ts, path = None, None, None
+            meta = {"error": wsl_message, "sessions_exists": False}
+        elif not _wsl_linux_command_exists(cfg, "python3"):
+            rl, ts, path = None, None, None
+            meta = {"error": "Linux 側 python3 が見つかりません。", "sessions_exists": False}
+        else:
+            rl, ts, path, meta = find_latest_codex_event_wsl(cfg, max_days=codex_max_days)
+        print(f"[Codex] sessions dir exists: {bool(meta.get('sessions_exists'))}  ({_wsl_label(cfg)} ~/.codex/sessions)")
+        if meta.get("error"):
+            print(f"[Codex] source error: {meta.get('error')}")
+    else:
+        sessions_dir = os.path.join(HOME, ".codex", "sessions")
+        rl, ts, path, meta = find_latest_codex_event(sessions_dir, max_days=codex_max_days)
+        print("[Codex] source: Windows")
+        print(f"[Codex] sessions dir exists: {os.path.isdir(sessions_dir)}  ({mask_path(sessions_dir)})")
     print(f"[Codex] max_days: {codex_max_days}")
-    rl, ts, path, meta = find_latest_codex_event(sessions_dir, max_days=codex_max_days)
     print(f"[Codex] latest rate_limits file: {mask_path(path)}")
     print(f"[Codex] timestamp: {ts}")
     print(f"[Codex] data age: {fmt_age(ts) if ts else None}")
@@ -1220,15 +1660,29 @@ def run_probe(cfg, show_raw=False):
     print()
 
     # Claude Code 公式 OAuth usage API
-    cred_path = os.path.join(HOME, ".claude", ".credentials.json")
-    token, expires_at = _read_claude_token()
-    print(f"[Claude] credentials: {mask_path(cred_path)}  (exists={os.path.exists(cred_path)})")
+    claude_uses_wsl = _provider_uses_wsl(cfg, "claude")
+    if claude_uses_wsl:
+        cred_label = f"{_wsl_label(cfg)} ~/.claude/.credentials.json"
+        has_wsl_python = wsl_ready and _wsl_linux_command_exists(cfg, "python3")
+        cred_exists = has_wsl_python and _wsl_path_exists(cfg, "-f", '"$HOME/.claude/.credentials.json"')
+    else:
+        has_wsl_python = False
+        cred_path = os.path.join(HOME, ".claude", ".credentials.json")
+        cred_label = mask_path(cred_path)
+        cred_exists = os.path.exists(cred_path)
+    if claude_uses_wsl and (not wsl_ready or not has_wsl_python):
+        token, expires_at = None, None
+    else:
+        token, expires_at = _read_claude_token(cfg)
+    print(f"[Claude] source: {_wsl_label(cfg) if claude_uses_wsl else 'Windows'}")
+    print(f"[Claude] credentials: {cred_label}  (exists={cred_exists})")
     print(f"[Claude] token: {'取得OK' if token else '見つかりません'}", end="")
     if expires_at:
         exp = parse_dt(expires_at)
         print(f"  (expiresAt={exp})", end="")
     print()
-    print(f"[Claude] user-agent version: claude-code/{_claude_code_version()}")
+    claude_ver = _claude_code_version(cfg) if (not claude_uses_wsl or wsl_ready) else "2.0.0"
+    print(f"[Claude] user-agent version: claude-code/{claude_ver}")
     print(f"[Claude] endpoint: {CLAUDE_USAGE_URL}")
     if token:
         # キャッシュを無視して生レスポンスを 1 回取得
@@ -1249,7 +1703,12 @@ def run_probe(cfg, show_raw=False):
     print()
 
     # antigravity-usage 生出力
-    cmd, reason = build_antigravity_cmd(cfg)
+    antigravity_uses_wsl = _provider_uses_wsl(cfg, "antigravity")
+    print(f"[Antigravity] source: {_wsl_label(cfg) if antigravity_uses_wsl else 'Windows'}")
+    if antigravity_uses_wsl and not wsl_ready:
+        cmd, reason = None, wsl_message
+    else:
+        cmd, reason = build_antigravity_cmd(cfg)
     print(f"[Antigravity] npx_fallback: {bool(cfg.get('antigravity_npx_fallback', False))}"
           f"  version: {cfg.get('antigravity_usage_version', '')!r}")
     print(f"[Antigravity] cmd: {mask_path(cmd)}")
@@ -1293,7 +1752,7 @@ def run_settings_gui(cfg):
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
-    root.geometry("420x460")
+    root.geometry("460x620")
     root.resizable(False, False)
 
     default_font = ("Yu Gothic UI", 10)
@@ -1324,7 +1783,28 @@ def run_settings_gui(cfg):
     ent_interval.pack(side=tk.LEFT, padx=5)
     ttk.Label(interval_lf, text="(最小30秒以上)").pack(side=tk.LEFT)
 
-    # 3. Antigravity の設定
+    # 3. WSL データソース
+    wsl_lf = ttk.LabelFrame(main_frame, text="WSL データソース", padding="10")
+    wsl_lf.pack(fill=tk.X, pady=(0, 10))
+
+    wsl_cfg = cfg.get("wsl", {}) if isinstance(cfg.get("wsl", {}), dict) else {}
+    wsl_enabled = wsl_cfg.get("enabled", {}) if isinstance(wsl_cfg.get("enabled", {}), dict) else {}
+    var_wsl_distro = tk.StringVar(value=str(wsl_cfg.get("distro", "") or ""))
+    var_wsl_claude = tk.BooleanVar(value=bool(wsl_enabled.get("claude", False)))
+    var_wsl_codex = tk.BooleanVar(value=bool(wsl_enabled.get("codex", False)))
+    var_wsl_antigravity = tk.BooleanVar(value=bool(wsl_enabled.get("antigravity", False)))
+
+    distro_row = ttk.Frame(wsl_lf)
+    distro_row.pack(fill=tk.X, pady=(0, 5))
+    ttk.Label(distro_row, text="Distro:").pack(side=tk.LEFT)
+    ttk.Entry(distro_row, textvariable=var_wsl_distro, width=24).pack(side=tk.LEFT, padx=5)
+    ttk.Label(distro_row, text="(空欄=既定)").pack(side=tk.LEFT)
+    ttk.Checkbutton(wsl_lf, text="Claude Code を WSL 側から取得", variable=var_wsl_claude).pack(anchor=tk.W, pady=1)
+    ttk.Checkbutton(wsl_lf, text="Codex を WSL 側から取得", variable=var_wsl_codex).pack(anchor=tk.W, pady=1)
+    ttk.Checkbutton(wsl_lf, text="Antigravity を WSL 側から取得", variable=var_wsl_antigravity).pack(anchor=tk.W, pady=1)
+    ttk.Label(wsl_lf, text="※ WSL 側の認証情報・セッションログ・CLI を参照します。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
+
+    # 4. Antigravity の設定
     anti_lf = ttk.LabelFrame(main_frame, text="Antigravity 設定", padding="10")
     anti_lf.pack(fill=tk.X, pady=(0, 10))
 
@@ -1332,7 +1812,7 @@ def run_settings_gui(cfg):
     ttk.Checkbutton(anti_lf, text="オートコンプリート専用モデルも表示する", variable=var_auto).pack(anchor=tk.W, pady=(0, 5))
     ttk.Label(anti_lf, text="※ モデルは共通枠ごとに自動でまとめて表示されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
 
-    # 4. アイコン表示(配色モード)
+    # 5. アイコン表示(配色モード)
     icon_lf = ttk.LabelFrame(main_frame, text="アイコン表示", padding="10")
     icon_lf.pack(fill=tk.X, pady=(0, 10))
 
@@ -1368,6 +1848,14 @@ def run_settings_gui(cfg):
         cfg["refresh_seconds"] = val
         cfg["antigravity_show_autocomplete"] = var_auto.get()
         cfg["icon_color_mode"] = color_label_to_mode.get(var_color_mode.get(), "classic")
+        cfg["wsl"] = {
+            "distro": var_wsl_distro.get().strip(),
+            "enabled": {
+                "claude": var_wsl_claude.get(),
+                "codex": var_wsl_codex.get(),
+                "antigravity": var_wsl_antigravity.get(),
+            },
+        }
 
         # 旧バージョンの設定に残っているモデルフィルタは不要になったため掃除する
         cfg.pop("antigravity_models", None)
