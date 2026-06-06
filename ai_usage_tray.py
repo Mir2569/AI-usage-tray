@@ -640,6 +640,7 @@ def provider_antigravity(cfg):
 
     seen = set()
     candidates = 0  # オートコンプリート除外後の候補数
+    raw_windows = []
     for item in found:
         if item.get("auto") and not show_auto:
             continue
@@ -655,7 +656,37 @@ def provider_antigravity(cfg):
         seen.add(key)
         rp = remaining_pct_of(item)
         reset_at = parse_dt(item["reset_raw"])
-        res["windows"].append(make_window(name, remaining_pct=rp, reset_at=reset_at))
+        raw_windows.append(make_window(name, remaining_pct=rp, reset_at=reset_at))
+
+    # 同一残り割合・リセット日時のモデルをグループ化して集約する
+    groups = {}
+    keys_order = []
+    for w in raw_windows:
+        rp = w["remaining_pct"]
+        rp_key = round(rp, 2) if rp is not None else None
+        reset_key = w["reset_at"]
+        key = (rp_key, reset_key)
+        if key not in groups:
+            groups[key] = []
+            keys_order.append(key)
+        groups[key].append(w)
+
+    for key in keys_order:
+        group = groups[key]
+        if len(group) == 1:
+            res["windows"].append(group[0])
+        else:
+            labels = [w["label"] for w in group]
+            common_prefix = os.path.commonprefix(labels)
+            common_prefix = common_prefix.rstrip(" -_/.")
+            if len(common_prefix) >= 3:
+                new_label = f"{common_prefix}等 (共通枠)"
+            else:
+                new_label = f"{labels[0]}等 (共通枠)"
+
+            repr_w = dict(group[0])
+            repr_w["label"] = new_label
+            res["windows"].append(repr_w)
 
     if res["windows"]:
         res["ok"] = True
@@ -810,8 +841,26 @@ def run_tray(cfg):
     state = {"results": [], "lock": threading.Lock(),
              "remaining": None, "theme": _windows_is_light_theme()}
 
+    def show_settings(icon):
+        def run_launcher():
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--settings"]
+            else:
+                cmd = [sys.executable, __file__, "--settings"]
+
+            rc, out, err = run_cmd(cmd, timeout=300)
+            if rc == 0:
+                new_cfg = load_config()
+                cfg.clear()
+                cfg.update(new_cfg)
+                refresh(icon)
+
+        threading.Thread(target=run_launcher, daemon=True).start()
+
     def build_menu():
         items = []
+        items.append(Item("AI Usage Tray", None, enabled=False))
+        items.append(Menu.SEPARATOR)
         with state["lock"]:
             results = list(state["results"])
         if not results:
@@ -838,6 +887,7 @@ def run_tray(cfg):
                 if r["note"]:
                     items.append(Item("   " + r["note"][:120], None, enabled=False))
             items.append(Menu.SEPARATOR)
+        items.append(Item("設定...", lambda icon, item: show_settings(icon)))
         items.append(Item("今すぐ更新", lambda icon, item: refresh(icon)))
         items.append(Item("終了", lambda icon, item: icon.stop()))
         return Menu(*items)
@@ -987,12 +1037,115 @@ def run_probe(cfg):
     print("=" * 60)
     print(summarize_text(collect(cfg)))
 
+# ---------------------------------------------------------------------------
+def run_settings_gui(cfg):
+    try:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+    except ImportError:
+        print("tkinter が利用できません。Python の標準インストールを確認してください。", file=sys.stderr)
+        sys.exit(1)
+
+    root = tk.Tk()
+    root.title("AI Usage Tray 設定")
+    root.geometry("420x450")
+    root.resizable(False, False)
+
+    default_font = ("Yu Gothic UI", 10)
+    root.option_add("*Font", default_font)
+
+    main_frame = ttk.Frame(root, padding="15")
+    main_frame.pack(fill=tk.BOTH, expand=True)
+
+    # 1. 有効にするプロバイダ
+    prov_lf = ttk.LabelFrame(main_frame, text="有効にするプロバイダ", padding="10")
+    prov_lf.pack(fill=tk.X, pady=(0, 10))
+
+    var_claude = tk.BooleanVar(value=cfg["enabled"].get("claude", True))
+    var_codex = tk.BooleanVar(value=cfg["enabled"].get("codex", True))
+    var_antigravity = tk.BooleanVar(value=cfg["enabled"].get("antigravity", True))
+
+    ttk.Checkbutton(prov_lf, text="Claude Code (公式 OAuth API)", variable=var_claude).pack(anchor=tk.W, pady=2)
+    ttk.Checkbutton(prov_lf, text="Codex (ローカルセッションログ)", variable=var_codex).pack(anchor=tk.W, pady=2)
+    ttk.Checkbutton(prov_lf, text="Antigravity (antigravity-usage)", variable=var_antigravity).pack(anchor=tk.W, pady=2)
+
+    # 2. 自動更新間隔
+    interval_lf = ttk.LabelFrame(main_frame, text="更新間隔", padding="10")
+    interval_lf.pack(fill=tk.X, pady=(0, 10))
+
+    ttk.Label(interval_lf, text="自動更新間隔 (秒):").pack(side=tk.LEFT)
+    var_interval = tk.StringVar(value=str(cfg.get("refresh_seconds", 300)))
+    ent_interval = ttk.Entry(interval_lf, textvariable=var_interval, width=8)
+    ent_interval.pack(side=tk.LEFT, padx=5)
+    ttk.Label(interval_lf, text="(最小30秒以上)").pack(side=tk.LEFT)
+
+    # 3. Antigravity の設定
+    anti_lf = ttk.LabelFrame(main_frame, text="Antigravity 設定", padding="10")
+    anti_lf.pack(fill=tk.X, pady=(0, 10))
+
+    var_auto = tk.BooleanVar(value=cfg.get("antigravity_show_autocomplete", False))
+    ttk.Checkbutton(anti_lf, text="オートコンプリート専用モデルも表示する", variable=var_auto).pack(anchor=tk.W, pady=(0, 5))
+
+    ttk.Label(anti_lf, text="表示するモデルの部分一致フィルタ (カンマ区切り):").pack(anchor=tk.W)
+    models_str = ", ".join(cfg.get("antigravity_models", []))
+    var_models = tk.StringVar(value=models_str)
+    ent_models = ttk.Entry(anti_lf, textvariable=var_models)
+    ent_models.pack(fill=tk.X, pady=(2, 0))
+    ttk.Label(anti_lf, text="※ 空の場合はすべての主要モデルを表示します。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W, pady=(2, 0))
+
+    # 保存/キャンセル
+    btn_frame = ttk.Frame(main_frame)
+    btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+
+    def on_save():
+        try:
+            val = int(var_interval.get())
+            if val < 30:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("エラー", "更新間隔には 30 以上の数値を入力してください。")
+            return
+
+        cfg["enabled"]["claude"] = var_claude.get()
+        cfg["enabled"]["codex"] = var_codex.get()
+        cfg["enabled"]["antigravity"] = var_antigravity.get()
+        cfg["refresh_seconds"] = val
+        cfg["antigravity_show_autocomplete"] = var_auto.get()
+
+        m_list = [s.strip() for s in var_models.get().split(",")]
+        cfg["antigravity_models"] = [s for s in m_list if s]
+
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+            root.destroy()
+            sys.exit(0)
+        except Exception as e:
+            messagebox.showerror("エラー", f"設定の保存に失敗しました:\n{e}")
+
+    def on_cancel():
+        root.destroy()
+        sys.exit(1)
+
+    ttk.Button(btn_frame, text="保存", command=on_save).pack(side=tk.RIGHT, padx=5)
+    ttk.Button(btn_frame, text="キャンセル", command=on_cancel).pack(side=tk.RIGHT)
+
+    root.update_idletasks()
+    w = root.winfo_width()
+    h = root.winfo_height()
+    x = (root.winfo_screenwidth() // 2) - (w // 2)
+    y = (root.winfo_screenheight() // 2) - (h // 2)
+    root.geometry(f"+{x}+{y}")
+
+    root.mainloop()
+
 
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="AI Usage Tray")
     ap.add_argument("--once", action="store_true", help="1回だけ取得してテキスト表示")
     ap.add_argument("--probe", action="store_true", help="各データソースの生データを表示")
+    ap.add_argument("--settings", action="store_true", help="設定ダイアログを表示")
     args = ap.parse_args()
 
     # Windows の cp932 コンソールだと中点(·)等の出力で UnicodeEncodeError になるため、
@@ -1005,6 +1158,9 @@ def main():
 
     cfg = load_config()
 
+    if args.settings:
+        run_settings_gui(cfg)
+        return
     if args.probe:
         run_probe(cfg)
         return
