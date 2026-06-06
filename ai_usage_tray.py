@@ -51,6 +51,7 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     "refresh_seconds": 300,            # 自動更新間隔(秒)
+    "codex_max_days": 10,              # Codex セッションログの走査日数
     "enabled": {"claude": True, "codex": True, "antigravity": True},
     # Antigravity で表示したいモデル名の部分一致フィルタ(空なら主要モデルを自動選択)
     "antigravity_models": [],
@@ -135,6 +136,28 @@ def fmt_reset(reset_at):
     return f"あと{m}分 ({clock})"
 
 
+def fmt_age(dt):
+    """datetime を 'N分前 (HH:MM)' 形式にする。"""
+    if not dt:
+        return "不明"
+    delta = now_utc() - dt.astimezone(timezone.utc)
+    secs = int(delta.total_seconds())
+    local = dt.astimezone()
+    clock = local.strftime("%H:%M")
+    if secs < 0:
+        return f"未来時刻 ({clock})"
+    if secs < 60:
+        return f"{secs}秒前 ({clock})"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}分前 ({clock})"
+    hours = mins // 60
+    if hours < 48:
+        return f"{hours}時間前 ({clock})"
+    days = hours // 24
+    return f"{days}日前 ({clock})"
+
+
 def run_cmd(cmd, timeout=30):
     """コマンドを実行し (returncode, stdout, stderr)。Windows の .cmd shim も考慮。"""
     # noconsole(pythonw / exe)で動かすと、子プロセス起動のたびに黒いコンソール窓が
@@ -209,25 +232,36 @@ def make_window(label, used_pct=None, remaining_pct=None, reset_at=None, detail=
 # Provider: Codex  (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
 # ---------------------------------------------------------------------------
 def find_latest_codex_event(sessions_dir, max_days=10):
-    """最新の token_count イベント(rate_limits 付き)と、そのファイルの timestamp を返す。"""
+    """最新の rate_limits イベントと診断メタ情報を返す。"""
+    meta = {
+        "candidate_files": 0,
+        "scanned_files": 0,
+        "rate_limit_events": 0,
+        "file_mtime": None,
+        "line_number": None,
+    }
     if not os.path.isdir(sessions_dir):
-        return None, None, None
+        return None, None, None, meta
     files = glob.glob(os.path.join(sessions_dir, "**", "rollout-*.jsonl"), recursive=True)
     if not files:
-        return None, None, None
+        return None, None, None, meta
     files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     cutoff = time.time() - max_days * 86400
+    best = None
+    best_key = None
+    event_seq = 0
     for path in files:
         try:
-            if os.path.getmtime(path) < cutoff:
+            mtime = os.path.getmtime(path)
+            if mtime < cutoff:
                 break
         except OSError:
             continue
-        latest = None
-        latest_ts = None
+        meta["candidate_files"] += 1
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
+                meta["scanned_files"] += 1
+                for line_no, line in enumerate(f, start=1):
                     line = line.strip()
                     if not line or "rate_limits" not in line:
                         continue
@@ -242,23 +276,43 @@ def find_latest_codex_event(sessions_dir, max_days=10):
                     if not rl:
                         continue
                     ts = parse_dt(rec.get("timestamp"))
-                    latest = rl
-                    latest_ts = ts
-            if latest is not None:
-                return latest, latest_ts, path
+                    meta["rate_limit_events"] += 1
+                    event_seq += 1
+                    event_epoch = ts.timestamp() if ts else mtime
+                    key = (event_epoch, mtime, event_seq)
+                    if best_key is None or key > best_key:
+                        best_key = key
+                        best = {
+                            "rate_limits": rl,
+                            "timestamp": ts,
+                            "path": path,
+                            "file_mtime": datetime.fromtimestamp(mtime, tz=timezone.utc),
+                            "line_number": line_no,
+                        }
         except Exception:
             continue
-    return None, None, None
+    if best is None:
+        return None, None, None, meta
+    meta["file_mtime"] = best["file_mtime"]
+    meta["line_number"] = best["line_number"]
+    return best["rate_limits"], best["timestamp"], best["path"], meta
 
 
 def provider_codex(cfg):
     res = {"name": "Codex", "ok": False, "error": None, "windows": [], "note": ""}
     sessions_dir = os.path.join(HOME, ".codex", "sessions")
-    rl, ts, path = find_latest_codex_event(sessions_dir)
+    max_days = int(cfg.get("codex_max_days", 10))
+    rl, ts, path, meta = find_latest_codex_event(sessions_dir, max_days=max_days)
     if rl is None:
         res["error"] = "セッションデータが見つかりません (~/.codex/sessions)。Codexで一度メッセージを送ると生成されます。"
         return res
     base = ts or now_utc()
+    data_age = fmt_age(ts) if ts else "イベント時刻 不明"
+    file_age = fmt_age(meta.get("file_mtime"))
+    source = mask_path(path)
+    res["note"] = (
+        f"Codexデータ: {data_age} / ログ更新: {file_age} / 採用ログ: {source}"
+    )
 
     def window_from(key, label):
         d = rl.get(key)
@@ -291,7 +345,8 @@ def provider_codex(cfg):
                     reset_at = parse_dt(v)
                     if reset_at is not None:
                         break
-        return make_window(label, used_pct=used, reset_at=reset_at)
+        return make_window(label, used_pct=used, reset_at=reset_at,
+                           detail=f"データ {data_age}")
 
     w5 = window_from("primary", "5時間")
     ww = window_from("secondary", "週")
@@ -714,6 +769,8 @@ def run_tray(cfg):
                     extra = f" ({w['detail']})" if (w["detail"] and w["remaining_pct"] is not None) else ""
                     items.append(Item(f"   {w['label']}: {head} · {fmt_reset(w['reset_at'])}{extra}",
                                       None, enabled=False))
+                if r["note"]:
+                    items.append(Item("   " + r["note"][:120], None, enabled=False))
             items.append(Menu.SEPARATOR)
         items.append(Item("今すぐ更新", lambda icon, item: refresh(icon)))
         items.append(Item("終了", lambda icon, item: icon.stop()))
@@ -772,10 +829,19 @@ def run_probe(cfg):
 
     # Codex 生データ
     sessions_dir = os.path.join(HOME, ".codex", "sessions")
+    codex_max_days = int(cfg.get("codex_max_days", 10))
     print(f"[Codex] sessions dir exists: {os.path.isdir(sessions_dir)}  ({mask_path(sessions_dir)})")
-    rl, ts, path = find_latest_codex_event(sessions_dir)
+    print(f"[Codex] max_days: {codex_max_days}")
+    rl, ts, path, meta = find_latest_codex_event(sessions_dir, max_days=codex_max_days)
     print(f"[Codex] latest rate_limits file: {mask_path(path)}")
     print(f"[Codex] timestamp: {ts}")
+    print(f"[Codex] data age: {fmt_age(ts) if ts else None}")
+    print(f"[Codex] file mtime: {meta.get('file_mtime')}")
+    print(f"[Codex] file age: {fmt_age(meta.get('file_mtime')) if meta.get('file_mtime') else None}")
+    print(f"[Codex] selected line: {meta.get('line_number')}")
+    print(f"[Codex] candidate files: {meta.get('candidate_files')}")
+    print(f"[Codex] scanned files: {meta.get('scanned_files')}")
+    print(f"[Codex] rate_limits events: {meta.get('rate_limit_events')}")
     print(f"[Codex] rate_limits: {json.dumps(rl, ensure_ascii=False) if rl else None}")
     print()
 

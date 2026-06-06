@@ -81,6 +81,7 @@ python ai_usage_tray.py --probe    # 各データソースの生データ・検�
 `config.example.json` を **`config.json`** という名前でコピーして編集すると挙動を変えられます（exe 版は exe と同じフォルダの config.json を読みます）。
 
 - `refresh_seconds`: 自動更新間隔（秒）。既定5分。
+- `codex_max_days`: Codex セッションログをさかのぼって探す日数。既定10日。
 - `enabled`: 表示するツールだけ true。
 - `antigravity_models`: 表示モデルを部分一致で絞り込み（例 `["gemini-3-pro","gemini-3-flash"]`）。空なら主要モデルを自動選択。区切り文字・大文字小文字は無視されます。
 - `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。
@@ -112,6 +113,7 @@ python ai_usage_tray.py --probe
 
 - **Claude が出ない** → `~/.claude/.credentials.json` が無い／トークン期限切れ。Claude Code に一度ログイン／起動すれば直ります。
 - **Codex が出ない** → Codex で一度メッセージを送るとセッションログが作られます。
+- **Codex の値が古く見える** → Codex はセッションログの `rate_limits` 由来です。Codex 側が新しい `rate_limits` を書くまで値自体は変わりません。トレイメニューや `--probe` の `Codexデータ` / `ログ更新` を見て、採用データの鮮度を確認してください。
 - **Antigravity が出ない** → Antigravity の IDE を一度起動してから再取得（ローカルサーバが立ちます）。
 
 ---
