@@ -19,6 +19,7 @@ Windows のタスクトレイにまとめて表示する常駐アプリ。
 import sys
 import os
 import re
+import copy
 import json
 import time
 import shutil
@@ -28,6 +29,10 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 
 HOME = os.path.expanduser("~")
+
+# 共有設定 cfg への並行アクセス(設定保存スレッドの差し替え vs 取得スレッドの読み取り)を
+# 直列化するためのロック。差し替え中の一時的な空 dict を読んで KeyError になるのを防ぐ。
+cfg_lock = threading.Lock()
 
 
 def mask_path(path):
@@ -720,6 +725,10 @@ PROVIDER_NAMES = {
 
 
 def collect(cfg):
+    # 設定保存スレッドが cfg を差し替える瞬間に読んでも壊れないよう、ロック下で
+    # スナップショットを取ってから各 provider を実行する(ネットワーク中はロックを保持しない)。
+    with cfg_lock:
+        cfg = copy.deepcopy(cfg)
     results = []
     for key, fn in PROVIDERS:
         if not cfg["enabled"].get(key, True):
@@ -859,8 +868,10 @@ def run_tray(cfg):
             rc, out, err = run_cmd(cmd, timeout=None)
             if rc == 0:
                 new_cfg = load_config()
-                cfg.clear()
-                cfg.update(new_cfg)
+                # 取得スレッドが読み取り中の空 dict を見ないよう、clear+update を原子化する。
+                with cfg_lock:
+                    cfg.clear()
+                    cfg.update(new_cfg)
                 do_refresh(icon)
 
         threading.Thread(target=run_launcher, daemon=True).start()
@@ -869,6 +880,9 @@ def run_tray(cfg):
         items = []
         items.append(Item("AI Usage Tray", None, enabled=False))
         items.append(Menu.SEPARATOR)
+        # cfg 差し替え中の空 dict を読まないよう、enabled をロック下でスナップショットする。
+        with cfg_lock:
+            enabled = dict(cfg.get("enabled", {}))
         with state["lock"]:
             results = list(state["results"])
             fetching = state["fetching"]
@@ -876,13 +890,13 @@ def run_tray(cfg):
             # 取得中は起動時と同様に「取得中」を出す。既存の結果行は残し、
             # 直前データを見たまま更新を待てるようにする。
             pending = [PROVIDER_NAMES.get(key, key) for key, _ in PROVIDERS
-                       if cfg["enabled"].get(key, True)]
+                       if enabled.get(key, True)]
             label = f"🔄 取得中... ({', '.join(pending)})" if pending else "🔄 取得中..."
             items.append(Item(label, None, enabled=False))
             items.append(Menu.SEPARATOR)
         elif not results:
             pending = [PROVIDER_NAMES.get(key, key) for key, _ in PROVIDERS
-                       if cfg["enabled"].get(key, True)]
+                       if enabled.get(key, True)]
             label = f"取得中... ({', '.join(pending)})" if pending else "取得中..."
             items.append(Item(label, None, enabled=False))
         for r in results:
