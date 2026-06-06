@@ -20,7 +20,6 @@ import sys
 import os
 import re
 import json
-import glob
 import time
 import shutil
 import argparse
@@ -272,6 +271,28 @@ def make_window(label, used_pct=None, remaining_pct=None, reset_at=None, detail=
 # ---------------------------------------------------------------------------
 # Provider: Codex  (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
 # ---------------------------------------------------------------------------
+def _iter_rollout_files(sessions_dir):
+    """sessions_dir 配下の rollout-*.jsonl を (path, mtime) で再帰列挙する。
+    os.scandir を使い、stat を1回(Windows ではディレクトリ列挙時にキャッシュ済みで
+    追加 syscall が不要)に抑えることで、大量ファイル時の走査負荷を下げる。"""
+    stack = [sessions_dir]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif (entry.name.startswith("rollout-")
+                              and entry.name.endswith(".jsonl")):
+                            yield entry.path, entry.stat().st_mtime
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+
 def find_latest_codex_event(sessions_dir, max_days=10):
     """最新の rate_limits イベントと診断メタ情報を返す。"""
     meta = {
@@ -283,26 +304,22 @@ def find_latest_codex_event(sessions_dir, max_days=10):
     }
     if not os.path.isdir(sessions_dir):
         return None, None, None, meta
-    files = glob.glob(os.path.join(sessions_dir, "**", "rollout-*.jsonl"), recursive=True)
+    # セッションファイルは "セッション開始日" の YYYY/MM/DD 配下に置かれ、その後も
+    # 追記され得る(開始が max_days より前でも、今日 rate_limits が更新されることがある)。
+    # そのため日付ディレクトリでの絞り込みでは最新イベントを取りこぼすので、全ファイルを
+    # mtime で評価する。ただし os.scandir で stat を1回に抑え(Windows ではディレクトリ
+    # 列挙でキャッシュ済み)、glob + 二重 getmtime を避けて走査負荷を下げる。
+    files = list(_iter_rollout_files(sessions_dir))  # [(path, mtime), ...]
     if not files:
         return None, None, None, meta
-    def get_mtime_safe(p):
-        try:
-            return os.path.getmtime(p)
-        except OSError:
-            return 0.0
-    files.sort(key=get_mtime_safe, reverse=True)
+    files.sort(key=lambda t: t[1], reverse=True)
     cutoff = time.time() - max_days * 86400
     best = None
     best_key = None
     event_seq = 0
-    for path in files:
-        try:
-            mtime = os.path.getmtime(path)
-            if mtime < cutoff:
-                break
-        except OSError:
-            continue
+    for path, mtime in files:
+        if mtime < cutoff:
+            break
         meta["candidate_files"] += 1
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
