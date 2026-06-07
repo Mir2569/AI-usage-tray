@@ -54,7 +54,10 @@ python ai_usage_tray.py --probe-raw # 上記に加えて外部CLIの生出力も
 - **Codex**: 追加インストール不要。Codex で一度メッセージを送るとセッションログが作られ、そこから読みます。
 - **Antigravity**: `antigravity-usage`（npm）が必要。**既定では未導入時に何もしません**（`npm i -g antigravity-usage` での導入を推奨）。`config.json` で `antigravity_npx_fallback: true` にすると、未導入時に `npx -y antigravity-usage@<版>` で取得します（後述の注意あり）。Antigravity の **IDE が起動していれば**ローカル接続で取得できます。
 
-WSL 上で AI ツールを使っている場合は、設定で provider ごとに WSL 側の認証情報・セッションログ・CLI を参照できます。設定を追加しない限り、従来どおり Windows 側のデータソースを使います。
+> ### 💡 WSL でも使えます
+> WSL（Windows Subsystem for Linux）上で Claude Code / Codex / Antigravity を使っている場合は、provider ごとに **WSL 側の認証情報・セッションログ・CLI を参照して計測**できます。Windows 側と WSL 側を provider 単位で混在させることも可能です。
+> 設定を追加しない限り従来どおり Windows 側のデータソースを使うので、既存の動作は変わりません。
+> 設定方法と distro の記載例は下記「[WSL のデータソースを使う](#wsl-のデータソースを使う)」を参照してください。
 
 ---
 
@@ -111,7 +114,19 @@ WSL 上で AI ツールを使っている場合は、設定で provider ごと�
 - `wsl.enabled`: provider ごとに WSL 側のデータソースを使うか。`claude` は WSL 側 `~/.claude/.credentials.json`、`codex` は WSL 側 `~/.codex/sessions`、`antigravity` は WSL 側の Linux コマンドとして実行できる `antigravity-usage --json` を使います。
 - `paths.antigravity_usage`: `antigravity-usage` を自動検出できない場合に実行ファイルのフルパスを指定。
 
-WSL 側を使う設定例:
+### WSL のデータソースを使う
+
+WSL 上で動かしている Claude Code / Codex / Antigravity も計測できます。`wsl.enabled` を provider ごとに `true` にすると、その provider だけ WSL 側の認証情報・セッションログ・CLI を参照します（`true` にしない provider は従来どおり Windows 側）。対象ディストリビューションは `wsl.distro` で指定します（空欄なら既定 distro）。
+
+distro 名は環境ごとに異なります。インストール済みの名前は **`wsl -l -v`** で確認できます（`*` が付いているのが既定 distro）:
+
+```text
+  NAME            STATE           VERSION
+* Ubuntu-24.04    Running         2
+  AlmaLinux-10    Running         2
+```
+
+設定例（Ubuntu の場合）:
 
 ```json
 {
@@ -121,6 +136,19 @@ WSL 側を使う設定例:
   }
 }
 ```
+
+設定例（別の distro 名を指定する場合 / 例: AlmaLinux）:
+
+```json
+{
+  "wsl": {
+    "distro": "AlmaLinux-10",
+    "enabled": { "claude": true, "codex": true, "antigravity": true }
+  }
+}
+```
+
+`distro` を空欄（`""`）にすると、既定 distro（`wsl -l -v` で `*` が付くもの）を使います。複数 distro があり特定の 1 つを使いたいときは、上記のように名前を明示してください。
 
 WSL 側を参照する provider では、WSL 側に `python3` が必要です。Ubuntu 24.04 などの標準的な distro では通常インストール済みです。常駐アプリは停止中の WSL distro を自動起動しないため、値が出ない場合は先に `wsl -d Ubuntu-24.04` などで対象 distro を起動してください。
 
