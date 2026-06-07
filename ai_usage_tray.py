@@ -307,6 +307,33 @@ def run_cmd(cmd, timeout=30):
         return 1, "", str(e)
 
 
+def run_cmd_bytes(cmd, timeout=30):
+    """コマンドを実行し (returncode, stdout_bytes, stderr_bytes) を返す。"""
+    kwargs = {}
+    shell = False
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        target = cmd[0] if isinstance(cmd, list) else cmd
+        if str(target).lower().endswith((".bat", ".cmd")):
+            shell = True
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=False,
+            timeout=timeout,
+            shell=shell,
+            **kwargs,
+        )
+        return proc.returncode, proc.stdout or b"", proc.stderr or b""
+    except FileNotFoundError as e:
+        return 127, b"", str(e).encode("utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return 124, b"", b"timeout"
+    except Exception as e:
+        return 1, b"", str(e).encode("utf-8", errors="replace")
+
+
 def resolve_cmd(name, explicit=""):
     """実行可能なコマンドのパスを返す。見つからなければ None。
     コマンドプリロード攻撃を防ぐため、PATH 内の絶対パスのディレクトリのみを探索する。"""
@@ -372,10 +399,10 @@ def _wsl_default_distro_name():
     exe = _resolve_wsl_exe()
     if not exe:
         return ""
-    rc, out, err = run_cmd([exe, "-l", "-v"], timeout=3)
+    rc, lines, err = _wsl_list_output_lines(["-l", "-v"], timeout=3)
     if rc != 0:
         return ""
-    for line in _wsl_output_lines(out):
+    for line in lines:
         if not line.startswith("*"):
             continue
         parts = line[1:].strip().split()
@@ -425,50 +452,104 @@ def _resolve_wsl_exe():
     return exe
 
 
-def _wsl_output_lines(text):
+def _wsl_decode_list_output(data):
+    if isinstance(data, bytes):
+        if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+            return data.decode("utf-16", errors="replace")
+        if b"\x00" in data:
+            return data.decode("utf-16-le", errors="replace")
+        return data.decode("utf-8", errors="replace")
     # wsl.exe -l 系は環境により NUL 混じりで見えることがあるため、表示用に正規化する。
-    text = (text or "").replace("\x00", "")
+    return (data or "").replace("\x00", "")
+
+
+def _wsl_output_lines(data):
+    text = _wsl_decode_list_output(data)
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _wsl_list_output_lines(args, timeout=3):
+    exe = _resolve_wsl_exe()
+    if not exe:
+        return 127, [], "wsl.exe が見つかりません。"
+    rc, out, err = run_cmd_bytes([exe, *args], timeout=timeout)
+    if rc != 0:
+        detail = _wsl_decode_list_output(err or out).strip()
+        return rc, [], detail
+    return rc, _wsl_output_lines(out), ""
+
+
+def _wsl_cycle_cache(cfg):
+    cache = cfg.get("_wsl_cycle_cache") if isinstance(cfg, dict) else None
+    return cache if isinstance(cache, dict) else None
 
 
 def _wsl_running_status(cfg):
     exe = _resolve_wsl_exe()
     if not exe:
         return False, "wsl.exe が見つかりません。WSL を有効化してから再実行してください。"
-    rc, out, err = run_cmd([exe, "--list", "--running", "--quiet"], timeout=3)
-    if rc != 0:
-        detail = mask_path(redact_text((err or out).strip()))[:150]
-        return False, f"WSL の起動状態を確認できませんでした: {detail or '不明なエラー'}"
-    running = _wsl_output_lines(out)
     distro = _wsl_distro(cfg)
+    cache = _wsl_cycle_cache(cfg)
+    cache_key = ("running_status", distro.lower())
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    rc, running, err = _wsl_list_output_lines(["--list", "--running", "--quiet"], timeout=3)
+    if rc != 0:
+        detail = mask_path(redact_text(err.strip()))[:150]
+        result = (False, f"WSL の起動状態を確認できませんでした: {detail or '不明なエラー'}")
+        if cache is not None:
+            cache[cache_key] = result
+        return result
     if distro:
         if any(line.lower() == distro.lower() for line in running):
-            return True, ""
-        return False, f"WSL ディストリビューション '{distro}' が起動していません。`wsl -d {distro}` で起動してから再取得してください。"
+            result = (True, "")
+        else:
+            result = (False, f"WSL ディストリビューション '{distro}' が起動していません。`wsl -d {distro}` で起動してから再取得してください。")
+        if cache is not None:
+            cache[cache_key] = result
+        return result
     default_distro = _wsl_default_distro_name()
     if default_distro:
         if any(line.lower() == default_distro.lower() for line in running):
-            return True, ""
-        return False, f"WSL 既定ディストリビューション '{default_distro}' が起動していません。`wsl -d {default_distro}` で起動してから再取得してください。"
-    if running:
-        return False, "WSL 既定ディストリビューションを確認できませんでした。`wsl -l -v` で既定を確認してください。"
-    return False, "WSL 既定ディストリビューションが起動していません。WSL を起動してから再取得してください。"
+            result = (True, "")
+        else:
+            result = (False, f"WSL 既定ディストリビューション '{default_distro}' が起動していません。`wsl -d {default_distro}` で起動してから再取得してください。")
+    elif running:
+        result = (False, "WSL 既定ディストリビューションを確認できませんでした。`wsl -l -v` で既定を確認してください。")
+    else:
+        result = (False, "WSL 既定ディストリビューションが起動していません。WSL を起動してから再取得してください。")
+    if cache is not None:
+        cache[cache_key] = result
+    return result
 
 
 def _wsl_linux_command_path(cfg, name):
     if not re.fullmatch(r"[0-9A-Za-z._-]+", name or ""):
         return None
+    cache = _wsl_cycle_cache(cfg)
+    cache_key = ("command_path", _wsl_distro(cfg).lower(), name)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     script = f'command -v {_shell_quote(name)} 2>/dev/null | head -n 1'
     rc, out, err = run_wsl_sh(cfg, script, timeout=5)
     if rc != 0:
+        if cache is not None:
+            cache[cache_key] = None
         return None
     path = (out or "").strip().splitlines()
     if not path:
+        if cache is not None:
+            cache[cache_key] = None
         return None
     path = path[0].strip()
     if re.match(r"^/mnt/[A-Za-z]/", path):
+        if cache is not None:
+            cache[cache_key] = None
         return None
-    return path or None
+    result = path or None
+    if cache is not None:
+        cache[cache_key] = result
+    return result
 
 
 def _wsl_linux_command_exists(cfg, name):
@@ -1248,6 +1329,7 @@ def collect(cfg):
     # スナップショットを取ってから各 provider を実行する(ネットワーク中はロックを保持しない)。
     with cfg_lock:
         cfg = copy.deepcopy(cfg)
+    cfg["_wsl_cycle_cache"] = {}
     results = []
     for key, fn in PROVIDERS:
         if not cfg["enabled"].get(key, True):
@@ -1599,6 +1681,7 @@ def run_tray(cfg):
 # 診断 (probe)
 # ---------------------------------------------------------------------------
 def run_probe(cfg, show_raw=False):
+    cfg["_wsl_cycle_cache"] = {}
     print("=" * 60)
     print("AI Usage Tray  PROBE")
     print("=" * 60)
