@@ -41,8 +41,21 @@ def _iter_rollout_files(sessions_dir):
             continue
 
 
+def _rl_is_usable(rl):
+    """rate_limits dict が primary または secondary に有効な枠データ(dict)を持つか判定する。
+    Free の月次100%到達直後に出る終端イベントは primary/secondary が null になるため
+    この判定で弾き、直前の有用なイベントを優先選択するために使う。"""
+    return isinstance(rl.get("primary"), dict) or isinstance(rl.get("secondary"), dict)
+
+
 def find_latest_codex_event(sessions_dir, max_days=10):
-    """最新の rate_limits イベントと診断メタ情報を返す。"""
+    """最新の rate_limits イベントと診断メタ情報を返す。
+
+    2本追跡:
+    - best_usable: primary か secondary が dict であるイベントのうち最新
+    - best_any   : 全 rate_limits イベント中の最新（フォールバック）
+    usable がある場合は best_usable を返し、終端 null イベントを掴まない。
+    """
     meta = {
         "candidate_files": 0,
         "scanned_files": 0,
@@ -62,8 +75,10 @@ def find_latest_codex_event(sessions_dir, max_days=10):
         return None, None, None, meta
     files.sort(key=lambda t: t[1], reverse=True)
     cutoff = time.time() - max_days * 86400
-    best = None
-    best_key = None
+    best_usable = None
+    best_usable_key = None
+    best_any = None
+    best_any_key = None
     event_seq = 0
     for path, mtime in files:
         if mtime < cutoff:
@@ -91,17 +106,26 @@ def find_latest_codex_event(sessions_dir, max_days=10):
                     event_seq += 1
                     event_epoch = ts.timestamp() if ts else mtime
                     key = (event_epoch, mtime, event_seq)
-                    if best_key is None or key > best_key:
-                        best_key = key
-                        best = {
-                            "rate_limits": rl,
-                            "timestamp": ts,
-                            "path": path,
-                            "file_mtime": datetime.fromtimestamp(mtime, tz=timezone.utc),
-                            "line_number": line_no,
-                        }
+                    entry = {
+                        "rate_limits": rl,
+                        "timestamp": ts,
+                        "path": path,
+                        "file_mtime": datetime.fromtimestamp(mtime, tz=timezone.utc),
+                        "line_number": line_no,
+                    }
+                    # 全イベント中の最新（フォールバック）
+                    if best_any_key is None or key > best_any_key:
+                        best_any_key = key
+                        best_any = entry
+                    # primary/secondary に有効な枠データを持つイベントのうち最新
+                    if _rl_is_usable(rl):
+                        if best_usable_key is None or key > best_usable_key:
+                            best_usable_key = key
+                            best_usable = entry
         except Exception:
             continue
+    # usable イベントを優先し、無ければ any にフォールバック
+    best = best_usable if best_usable is not None else best_any
     if best is None:
         return None, None, None, meta
     meta["file_mtime"] = best["file_mtime"]
@@ -145,6 +169,11 @@ if not result["sessions_exists"]:
     print(json.dumps(result, ensure_ascii=False))
     sys.exit(0)
 
+def rl_is_usable(rl):
+    """primary か secondary に有効な枠データ(dict)を持つか判定する。
+    Free の終端 null イベント対策として usable なイベントを優先選択するために使う。"""
+    return isinstance(rl.get("primary"), dict) or isinstance(rl.get("secondary"), dict)
+
 files = []
 for root, dirs, names in os.walk(sessions):
     dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
@@ -157,8 +186,10 @@ for root, dirs, names in os.walk(sessions):
                 pass
 files.sort(key=lambda item: item[1], reverse=True)
 cutoff = time.time() - max_days * 86400
-best = None
-best_key = None
+best_usable = None
+best_usable_key = None
+best_any = None
+best_any_key = None
 event_seq = 0
 for path, mtime in files:
     if mtime < cutoff:
@@ -188,17 +219,26 @@ for path, mtime in files:
                 except Exception:
                     event_epoch = mtime
                 key = (event_epoch, mtime, event_seq)
-                if best_key is None or key > best_key:
-                    best_key = key
-                    best = {
-                        "rate_limits": rl,
-                        "timestamp": ts,
-                        "path": path,
-                        "file_mtime": mtime,
-                        "line_number": line_no,
-                    }
+                entry = {
+                    "rate_limits": rl,
+                    "timestamp": ts,
+                    "path": path,
+                    "file_mtime": mtime,
+                    "line_number": line_no,
+                }
+                # 全イベント中の最新（フォールバック）
+                if best_any_key is None or key > best_any_key:
+                    best_any_key = key
+                    best_any = entry
+                # primary/secondary に有効な枠データを持つイベントのうち最新
+                if rl_is_usable(rl):
+                    if best_usable_key is None or key > best_usable_key:
+                        best_usable_key = key
+                        best_usable = entry
     except Exception:
         continue
+# usable イベントを優先し、無ければ any にフォールバック
+best = best_usable if best_usable is not None else best_any
 if best:
     result.update(best)
     result["ok"] = True
@@ -223,6 +263,27 @@ print(json.dumps(result, ensure_ascii=False))
     if not data.get("ok"):
         return None, None, None, meta
     return data.get("rate_limits"), parse_dt(data.get("timestamp")), data.get("path"), meta
+
+
+# window_minutes → 表示ラベルのマッピング（既知の Codex 枠サイズ）
+_CODEX_WINDOW_LABELS = {300: "5時間", 10080: "週", 43200: "月"}
+
+
+def _codex_window_label(minutes, fallback):
+    """window_minutes からラベル文字列を返す。
+    既知のマッピングにあればそれを使い、未知の値は分数から「N日」「N時間」「N分」を
+    導出する。minutes が無効な場合は fallback（位置固定ラベル）を返す。
+    Plus(300/10080) が回帰しないことを保証するために既知マップを先に引く。"""
+    if isinstance(minutes, (int, float)) and int(minutes) in _CODEX_WINDOW_LABELS:
+        return _CODEX_WINDOW_LABELS[int(minutes)]
+    if isinstance(minutes, (int, float)) and minutes > 0:
+        m = int(minutes)
+        if m % 1440 == 0:
+            return f"{m // 1440}日"
+        if m % 60 == 0:
+            return f"{m // 60}時間"
+        return f"{m}分"
+    return fallback
 
 
 def provider_codex(cfg):
@@ -255,13 +316,19 @@ def provider_codex(cfg):
     source = f"{_wsl_label(cfg)} / " if use_wsl else ""
     res["note"] = f"{source}Codexデータ: {data_age} / ログ更新: {file_age}"
 
-    def window_from(key, label):
+    def window_from(key, fallback_label):
         d = rl.get(key)
         if not isinstance(d, dict):
             return None
         used = d.get("used_percent")
         if used is None:
             used = d.get("usedPercent")
+        # window_minutes からラベルを導出する。Free は 43200(月) や 10080(週)、
+        # Plus は 300(5時間) / 10080(週) が入る。既知マップ優先で Plus が回帰する。
+        minutes = d.get("window_minutes")
+        if minutes is None:
+            minutes = d.get("windowMinutes")
+        label = _codex_window_label(minutes, fallback_label)
         reset_at = None
         # 1) 相対秒(resets_in_seconds 系)
         for rk in ("resets_in_seconds", "reset_in_seconds", "resets_in",
@@ -297,5 +364,15 @@ def provider_codex(cfg):
     if res["windows"]:
         res["ok"] = True
     else:
-        res["error"] = "rate_limits を解釈できませんでした。"
+        # usable イベントが1件も無かった場合のエッジ: credits のみのプランか、
+        # 本当に枠データが空か、を credits で切り分ける
+        credits = rl.get("credits") if isinstance(rl, dict) else None
+        if isinstance(credits, dict) and credits.get("unlimited"):
+            res["ok"] = True
+            res["note"] = (res.get("note") or "") + " / 無制限プラン（使用枠なし）"
+        else:
+            res["error"] = (
+                "無料プランの利用枠情報が取得できませんでした"
+                "（Codex を一度利用すると Monthly limit が表示されます）。"
+            )
     return res
