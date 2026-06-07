@@ -84,6 +84,20 @@ def make_icon_image(remaining, color_mode="classic"):
     return img
 
 
+def _settings_launcher_cmd(entry=None):
+    """設定ダイアログを起動した入口と同じ経路で再実行する argv を返す。"""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--settings"]
+
+    entry = sys.argv[0] if entry is None else entry
+    entry_path = os.path.abspath(entry)
+    if (os.path.basename(entry_path).lower() == "__main__.py"
+            and os.path.basename(os.path.dirname(entry_path)).lower() == "ai_usage_tray"):
+        return [sys.executable, "-m", "ai_usage_tray", "--settings"]
+
+    return [sys.executable, entry, "--settings"]
+
+
 def run_tray(cfg):
     try:
         import pystray
@@ -103,12 +117,9 @@ def run_tray(cfg):
 
     def show_settings(icon):
         def run_launcher():
-            if getattr(sys, "frozen", False):
-                cmd = [sys.executable, "--settings"]
-            else:
-                # 起動に使われたエントリ(薄いランチャ ai_usage_tray.py か -m の __main__)を
-                # そのまま再実行する。__file__ はパッケージ内モジュールを指してしまうため使わない。
-                cmd = [sys.executable, sys.argv[0], "--settings"]
+            # 起動に使われたエントリ(薄いランチャ ai_usage_tray.py か -m の __main__)と
+            # 同じ経路で再実行する。__file__ はパッケージ内モジュールを指すため使わない。
+            cmd = _settings_launcher_cmd()
 
             # 設定ダイアログはユーザーがいつ閉じるか分からないため待ち時間に上限を設けない。
             # 上限があると、長く開いたまま保存してもタイムアウト済みで親プロセスの cfg が
