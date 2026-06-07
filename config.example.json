@@ -3,7 +3,6 @@
   "codex_max_days": 10,
   "enabled": { "claude": true, "codex": true, "antigravity": true },
   "icon_color_mode": "classic",
-  "antigravity_show_autocomplete": false,
   "antigravity_npx_fallback": false,
   "antigravity_usage_version": "0.2.9",
   "wsl": {

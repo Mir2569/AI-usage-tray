@@ -104,7 +104,7 @@ WSL 上で AI ツールを使っている場合は、設定で provider ごと�
 - `codex_max_days`: Codex セッションログをさかのぼって探す日数。既定10日。
 - `enabled`: 表示するツールだけ true。
 - `icon_color_mode`: アイコンの配色モード。`"classic"`（緑→黄→赤・既定）/ `"colorblind"`（青→黄→赤）。緑と赤が見分けづらい場合は `"colorblind"` を選びます。「設定...」→「アイコン表示」からも変更できます。
-- `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。Antigravity のモデルは残量・リセット時刻が一致する**共通枠**ごとに自動でまとめて1行表示されます（例 `Gemini 3 (共通枠)` / `Claude / GPT-OSS (共通枠)`）。
+- Antigravity のモデルはファミリ単位の**共通枠**に自動でまとめて表示されます。`Gemini (共通枠)` を上段、`Claude / GPT-OSS (共通枠)` を下段に固定し、オートコンプリート専用モデルは常に除外します（表示行には現れないため、旧 `antigravity_show_autocomplete` 設定は撤去しました）。
 - `antigravity_npx_fallback`: `antigravity-usage` が未検出のとき `npx` 経由で取得するか（**既定 false = opt-in**）。⚠ 有効にすると、常駐アプリがバックグラウンドで（既定5分ごとや初回・キャッシュ切れ時に）**npm からパッケージを取得・実行**します。気になる場合は無効のまま `npm i -g antigravity-usage` で導入するか、`paths.antigravity_usage` で実行ファイルを明示してください。
 - `antigravity_usage_version`: 上記 npx フォールバック時に使う固定バージョン（既定 `"0.2.9"`）。空文字にすると無印（最新）になりますが、サプライチェーンの観点から**非推奨**です。
 - `wsl.distro`: WSL のディストリビューション名。空文字なら Windows 側 `wsl.exe` の既定ディストリビューションを使います。既定は `wsl -l -v` で `*` が付いている distro です（例: `"Ubuntu-24.04"`）。解決できる場合、メニューや診断の `WSL:` 表示には実際の distro 名が出ます。

@@ -73,9 +73,8 @@ def run_settings_gui(cfg):
     anti_lf = ttk.LabelFrame(main_frame, text="Antigravity 設定", padding="10")
     anti_lf.pack(fill=tk.X, pady=(0, 10))
 
-    var_auto = tk.BooleanVar(value=cfg.get("antigravity_show_autocomplete", False))
-    ttk.Checkbutton(anti_lf, text="オートコンプリート専用モデルも表示する", variable=var_auto).pack(anchor=tk.W, pady=(0, 5))
-    ttk.Label(anti_lf, text="※ モデルは共通枠ごとに自動でまとめて表示されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
+    ttk.Label(anti_lf, text="※ モデルは Gemini 枠 / Claude・GPT-OSS 枠の共通枠ごとに自動でまとめて表示されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
+    ttk.Label(anti_lf, text="※ オートコンプリート専用モデルは常に除外されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
 
     # 5. アイコン表示(配色モード)
     icon_lf = ttk.LabelFrame(main_frame, text="アイコン表示", padding="10")
@@ -111,7 +110,6 @@ def run_settings_gui(cfg):
         cfg["enabled"]["codex"] = var_codex.get()
         cfg["enabled"]["antigravity"] = var_antigravity.get()
         cfg["refresh_seconds"] = val
-        cfg["antigravity_show_autocomplete"] = var_auto.get()
         cfg["icon_color_mode"] = color_label_to_mode.get(var_color_mode.get(), "classic")
         cfg["wsl"] = {
             "distro": var_wsl_distro.get().strip(),
@@ -122,8 +120,10 @@ def run_settings_gui(cfg):
             },
         }
 
-        # 旧バージョンの設定に残っているモデルフィルタは不要になったため掃除する
+        # 旧バージョンの設定に残っている不要キーを掃除する
+        # (antigravity_models: モデルフィルタ撤去 / antigravity_show_autocomplete: 共通枠化で無意味)
         cfg.pop("antigravity_models", None)
+        cfg.pop("antigravity_show_autocomplete", None)
 
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:

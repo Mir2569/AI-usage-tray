@@ -21,8 +21,6 @@ DEFAULT_CONFIG = {
     "enabled": {"claude": True, "codex": True, "antigravity": True},
     # トレイアイコンの配色モード。"classic"(緑→黄→赤) / "colorblind"(青→黄→赤)
     "icon_color_mode": "classic",
-    # Antigravity のオートコンプリート専用モデルも表示するか(既定は非表示)
-    "antigravity_show_autocomplete": False,
     # antigravity-usage が未検出のとき npx 経由で取得するか(既定は無効=opt-in)。
     # 有効にすると常駐アプリがバックグラウンドで npm からパッケージを取得・実行する。
     "antigravity_npx_fallback": False,
