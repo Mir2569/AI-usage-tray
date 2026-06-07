@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Provider: Antigravity  (antigravity-usage --json)。"""
 
-import os
 import re
 import json
 
@@ -17,6 +16,24 @@ from ..wsl import (
     build_wsl_cmd,
 )
 from .types import make_window
+
+# Antigravity の共通枠(quota pool)。実データ上、モデルは Gemini 枠と
+# Claude+GPT-OSS 枠の2枠に分かれ、枠内で remaining%・resetTime を共有する。
+# ファミリ(モデル名のキーワード)で常にこの2枠へ分け、表示順もこの定義順に固定する
+# (Gemini を上段、Claude / GPT-OSS を下段)。両枠の値がたまたま一致しても1行に潰さない。
+ANTIGRAVITY_POOLS = [
+    ("Gemini", ("gemini",)),
+    ("Claude / GPT-OSS", ("claude", "gpt")),
+]
+
+
+def _antigravity_pool_of(name):
+    """モデル名から所属する共通枠ラベルを返す。既知ファミリに当てはまらなければ None。"""
+    low = str(name).lower()
+    for label, keywords in ANTIGRAVITY_POOLS:
+        if any(kw in low for kw in keywords):
+            return label
+    return None
 
 
 def _walk_find_models(obj, found, parent_key=None, depth=0):
@@ -160,8 +177,6 @@ def provider_antigravity(cfg):
         res["error"] = "モデル使用量の項目が見つかりませんでした(--probe で生データ確認)。"
         return res
 
-    show_auto = bool(cfg.get("antigravity_show_autocomplete", False))
-
     def remaining_pct_of(item):
         if item["remain_raw"] is not None:
             v = item["remain_raw"]
@@ -176,7 +191,9 @@ def provider_antigravity(cfg):
     seen = set()
     raw_windows = []
     for item in found:
-        if item.get("auto") and not show_auto:
+        # オートコンプリート専用モデルは常に除外する。共通枠化により独立行を持たず、
+        # 表示には現れない一方、枠の代表値(残量最小)を不必要に押し下げる恐れがあるため。
+        if item.get("auto"):
             continue
         name = str(item["name"]) if item["name"] is not None else "model"
         key = name.lower()
@@ -187,44 +204,33 @@ def provider_antigravity(cfg):
         reset_at = parse_dt(item["reset_raw"])
         raw_windows.append(make_window(name, remaining_pct=rp, reset_at=reset_at))
 
-    # 同一残り割合・リセット日時のモデルをグループ化して集約する
-    groups = {}
-    keys_order = []
+    # 既知の共通枠(Gemini / Claude+GPT-OSS)ごとにファミリでまとめる。両枠の
+    # remaining%・resetTime がたまたま一致しても1行に潰さず、常に2枠へ分ける。
+    # 表示順は ANTIGRAVITY_POOLS の定義順に固定(Gemini を上段、Claude / GPT-OSS を下段)。
+    pools = {}      # pool_label -> [window, ...]
+    others = []     # 既知の枠に属さないモデル(将来の新ファミリ等)
     for w in raw_windows:
-        rp = w["remaining_pct"]
-        rp_key = round(rp, 2) if rp is not None else None
-        reset_key = w["reset_at"]
-        key = (rp_key, reset_key)
-        if key not in groups:
-            groups[key] = []
-            keys_order.append(key)
-        groups[key].append(w)
-
-    for key in keys_order:
-        group = groups[key]
-        if len(group) == 1:
-            res["windows"].append(group[0])
+        pool = _antigravity_pool_of(w["label"])
+        if pool is None:
+            others.append(w)
         else:
-            labels = [w["label"] for w in group]
-            common_prefix = os.path.commonprefix(labels).rstrip(" -_/.([")
-            if len(common_prefix) >= 3:
-                # 共通接頭辞がある(例: Gemini 3.x 群)→ それをそのまま枠名にする
-                base = common_prefix
-            else:
-                # 接頭辞が無い混在枠(例: Claude + GPT-OSS)→ 先頭ファミリ名を列挙
-                fams = []
-                for lb in labels:
-                    fam = lb.split(" ")[0]
-                    if fam not in fams:
-                        fams.append(fam)
-                base = " / ".join(fams)
+            pools.setdefault(pool, []).append(w)
 
-            repr_w = dict(group[0])
-            repr_w["label"] = f"{base} (共通枠)"
-            res["windows"].append(repr_w)
+    def _remaining_key(w):
+        return w["remaining_pct"] if w["remaining_pct"] is not None else float("inf")
 
-    # 残りが少ない枠を上に表示(最も余裕のない枠を優先)。残量不明は末尾へ。
-    res["windows"].sort(key=lambda w: w["remaining_pct"] if w["remaining_pct"] is not None else float("inf"))
+    for pool_label, _keywords in ANTIGRAVITY_POOLS:
+        group = pools.get(pool_label)
+        if not group:
+            continue
+        # 代表は枠内で最も余裕のない(残量最小)モデル。残量不明は末尾扱い。
+        repr_w = dict(min(group, key=_remaining_key))
+        repr_w["label"] = f"{pool_label} (共通枠)"
+        res["windows"].append(repr_w)
+
+    # 既知の枠に属さないモデルは残量昇順(最も余裕のない順)で末尾に個別表示する。
+    others.sort(key=_remaining_key)
+    res["windows"].extend(others)
 
     if res["windows"]:
         res["ok"] = True

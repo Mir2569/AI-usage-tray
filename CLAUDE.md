@@ -54,8 +54,9 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - ローカルモードは Antigravity の **IDE（エディタ）** が起動していれば自動接続。IDE を使わない場合は `antigravity-usage login`（クラウドモード）が必要。`agy` CLI 単体ではローカルサーバが立たない。
 - 実データ形式: `models` は配列。各要素 `label`, `modelId`, `remainingPercentage`(0..1 の割合。1=100%), `resetTime`(ISO), `isAutocompleteOnly`。
 - パーサ `_walk_find_models` は JSON を再帰走査して remaining/used + reset を持つオブジェクトを汎用抽出（将来の形式変更に強い）。`remainingPercentage` 等のキー名も対応済み。
-- 既定で `isAutocompleteOnly: true` のモデルは除外（`antigravity_show_autocomplete` で表示可）。
-- **共通枠の集約（Issue #20）**: Antigravity のモデルは remaining%・resetTime が枠単位で完全一致する（実データ上 Gemini 系 / Claude+GPT-OSS 系の2枠）。`(remaining_pct, reset_at)` でグループ化し、共通接頭辞があればそれを（例 `Gemini 3 (共通枠)`）、無ければ先頭ファミリ名を列挙して（例 `Claude / GPT-OSS (共通枠)`）1行に集約する。
+- `isAutocompleteOnly: true` のモデルは**常に除外**（Issue #63 で `antigravity_show_autocomplete` 設定・GUI チェックボックスを撤去。共通枠化で独立行を持たず、枠の代表値=残量最小を不必要に押し下げるのを避けるため固定除外）。古い config の残存キーは無害に無視。
+- **共通枠の集約（Issue #20 → #64 で固定2枠化）**: Antigravity の枠は実データ上 Gemini 系 / Claude+GPT-OSS 系の2枠。モデル名のファミリ（`ANTIGRAVITY_POOLS` のキーワード `gemini` / `claude`,`gpt`）で常にこの2枠へ分けて集約する（`_antigravity_pool_of`）。**両枠の remaining%・resetTime がたまたま一致しても1行に潰さない**。表示順は `ANTIGRAVITY_POOLS` の定義順に固定（`Gemini (共通枠)` を上段、`Claude / GPT-OSS (共通枠)` を下段）し、Antigravity だけは残量昇順ソートを行わない。各枠の代表値は枠内で残量最小（最も余裕のない）モデル。既知ファミリに該当しないモデルは末尾に残量昇順で個別表示。
+  - 旧実装は `(remaining_pct, reset_at)` 一致でグループ化＋共通接頭辞ラベル付けだったが、値が揃うと全モデルが1行（例 `Claude / Gemini / GPT-OSS (共通枠)`）に潰れて枠の区別が消える問題があったため、ファミリ固定方式へ変更した。
 - 旧 `antigravity_models`（モデル部分一致フィルタ）は共通枠化により無意味なため **撤去済み**（設定 GUI・DEFAULT_CONFIG から削除。古い config の残存キーは無害に無視）。
 - 出典: https://github.com/skainguyen1412/antigravity-usage
 
