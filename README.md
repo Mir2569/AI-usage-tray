@@ -110,13 +110,13 @@ python ai_usage_tray.py --probe-raw # 上記に加えて外部CLIの生出力も
 - Antigravity のモデルはファミリ単位の**共通枠**に自動でまとめて表示されます。`Gemini (共通枠)` を上段、`Claude / GPT-OSS (共通枠)` を下段に固定し、オートコンプリート専用モデルは常に除外します（表示行には現れないため、旧 `antigravity_show_autocomplete` 設定は撤去しました）。
 - `antigravity_npx_fallback`: `antigravity-usage` が未検出のとき `npx` 経由で取得するか（**既定 false = opt-in**）。⚠ 有効にすると、常駐アプリがバックグラウンドで（既定5分ごとや初回・キャッシュ切れ時に）**npm からパッケージを取得・実行**します。気になる場合は無効のまま `npm i -g antigravity-usage` で導入するか、`paths.antigravity_usage` で実行ファイルを明示してください。
 - `antigravity_usage_version`: 上記 npx フォールバック時に使う固定バージョン（既定 `"0.2.9"`）。空文字にすると無印（最新）になりますが、サプライチェーンの観点から**非推奨**です。
-- `wsl.distro`: WSL のディストリビューション名。空文字なら Windows 側 `wsl.exe` の既定ディストリビューションを使います。既定は `wsl -l -v` で `*` が付いている distro です（例: `"Ubuntu-24.04"`）。解決できる場合、メニューや診断の `WSL:` 表示には実際の distro 名が出ます。
+- `wsl.distro`: WSL のディストリビューション名。空文字なら Windows 側 `wsl.exe` の既定ディストリビューションを使います。設定ダイアログでは検出済み distro を候補から選べますが、空欄や候補外の手入力も可能です。既定は `wsl -l -v` で `*` が付いている distro です（例: `"Ubuntu-24.04"`）。解決できる場合、メニューや診断の `WSL:` 表示には実際の distro 名が出ます。
 - `wsl.enabled`: provider ごとに WSL 側のデータソースを使うか。`claude` は WSL 側 `~/.claude/.credentials.json`、`codex` は WSL 側 `~/.codex/sessions`、`antigravity` は WSL 側の Linux コマンドとして実行できる `antigravity-usage --json` を使います。
 - `paths.antigravity_usage`: `antigravity-usage` を自動検出できない場合に実行ファイルのフルパスを指定。
 
 ### WSL のデータソースを使う
 
-WSL 上で動かしている Claude Code / Codex / Antigravity も計測できます。`wsl.enabled` を provider ごとに `true` にすると、その provider だけ WSL 側の認証情報・セッションログ・CLI を参照します（`true` にしない provider は従来どおり Windows 側）。対象ディストリビューションは `wsl.distro` で指定します（空欄なら既定 distro）。
+WSL 上で動かしている Claude Code / Codex / Antigravity も計測できます。`wsl.enabled` を provider ごとに `true` にすると、その provider だけ WSL 側の認証情報・セッションログ・CLI を参照します（`true` にしない provider は従来どおり Windows 側）。対象ディストリビューションは `wsl.distro` で指定します（空欄なら既定 distro）。設定ダイアログでは検出済み distro をドロップダウン候補から選べます。
 
 distro 名は環境ごとに異なります。インストール済みの名前は **`wsl -l -v`** で確認できます（`*` が付いているのが既定 distro）:
 
@@ -148,7 +148,7 @@ distro 名は環境ごとに異なります。インストール済みの名前�
 }
 ```
 
-`distro` を空欄（`""`）にすると、既定 distro（`wsl -l -v` で `*` が付くもの）を使います。複数 distro があり特定の 1 つを使いたいときは、上記のように名前を明示してください。
+`distro` を空欄（`""`）にすると、既定 distro（`wsl -l -v` で `*` が付くもの）を使います。複数 distro があり特定の 1 つを使いたいときは、上記のように名前を明示してください。候補に出ない未起動・未列挙の distro 名も、従来どおり手入力できます。
 
 WSL 側を参照する provider では、WSL 側に `python3` が必要です。Ubuntu 24.04 などの標準的な distro では通常インストール済みです。常駐アプリは停止中の WSL distro を自動起動しないため、値が出ない場合は先に `wsl -d Ubuntu-24.04` などで対象 distro を起動してください。
 
