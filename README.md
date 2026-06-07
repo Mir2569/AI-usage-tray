@@ -172,7 +172,8 @@ python ai_usage_tray.py --probe
 
 ## ファイル構成
 
-- `ai_usage_tray.py` … 本体（単一ファイル）
+- `ai_usage_tray.py` … 薄いランチャ（`python ai_usage_tray.py` / `python -m ai_usage_tray` で起動）
+- `ai_usage_tray/` … 本体パッケージ（トレイ UI・各 provider・設定・WSL・診断などに分割）
 - `requirements.txt` … pystray, Pillow
 - `config.example.json` / `config.json` … 設定（config.json は .gitignore 済み）
 - `run.bat` … 通常起動（コンソールあり）
@@ -181,6 +182,58 @@ python ai_usage_tray.py --probe
 - `build_exe.bat` … PyInstaller で exe 化（Python 3.12 / onedir）
 - `app.ico` … exe 埋め込み用アイコン
 - `CLAUDE.md` … 開発・引き継ぎメモ（設計と確定仕様）
+
+### パッケージ構成（`ai_usage_tray/`）
+
+責務ごとにモジュール分割されています（矢印は import 依存。下の層ほど依存が少ない）。
+
+```mermaid
+graph TD
+    L["ai_usage_tray.py<br/>薄いランチャ"] --> M["__main__.py<br/>CLI / argparse"]
+
+    subgraph UI["エントリ・UI 層"]
+        M --> TRAY["tray.py<br/>トレイ UI・常駐ループ"]
+        M --> GUI["gui.py<br/>設定ダイアログ"]
+        M --> PROBE["probe.py<br/>診断 (--probe)"]
+    end
+
+    subgraph AGG["集約層"]
+        COLLECT["collect.py<br/>集約・summarize_text"]
+    end
+
+    subgraph PROV["provider 層"]
+        PROVIDERS["providers/<br/>claude・codex・antigravity<br/>(types, PROVIDERS)"]
+    end
+
+    subgraph BASE["基盤層"]
+        WSL["wsl.py<br/>WSL ヘルパー"]
+        CONFIG["config.py<br/>設定・凍結パス"]
+        STATE["state.py<br/>共有ロック/キャッシュ"]
+        UTILS["utils.py<br/>run_cmd・日時整形"]
+        REDACT["redact.py<br/>秘匿・マスク"]
+        CONST["constants.py<br/>定数"]
+    end
+
+    TRAY --> COLLECT
+    PROBE --> COLLECT
+    M --> COLLECT
+    COLLECT --> PROVIDERS
+    TRAY --> PROVIDERS
+    PROBE --> PROVIDERS
+    GUI --> CONFIG
+    TRAY --> CONFIG
+    PROVIDERS --> WSL
+    PROVIDERS --> CONFIG
+    PROVIDERS --> STATE
+    PROVIDERS --> UTILS
+    PROVIDERS --> REDACT
+    COLLECT --> STATE
+    WSL --> UTILS
+    WSL --> REDACT
+    REDACT --> CONST
+    TRAY --> STATE
+    TRAY --> CONST
+```
 
 ---
 

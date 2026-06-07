@@ -15,7 +15,12 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - 右クリックメニューに各サービスの枠ごとの残り%・リセット時刻、「今すぐ更新」「終了」。
 
 ## ファイル構成
-- `ai_usage_tray.py` … 本体（単一ファイル）。
+- `ai_usage_tray.py` … 薄いランチャ（`from ai_usage_tray.__main__ import main`）。配布・起動スクリプトのエントリ参照を維持するための入口。
+- `ai_usage_tray/` … 本体パッケージ（Issue #55 で責務ごとに分割）。
+  - `__main__.py`（CLI/argparse）, `config.py`（既定設定・load/凍結パス）, `redact.py`（秘匿・マスク）, `utils.py`（日時整形・`run_cmd`/`resolve_cmd`）, `state.py`（共有ロック/キャッシュ）, `wsl.py`（WSL ヘルパー）, `collect.py`（集約・`summarize_text`）, `tray.py`（トレイ UI）, `gui.py`（設定ダイアログ）, `probe.py`（診断）, `constants.py`。
+  - `providers/`（`codex.py` / `claude.py` / `antigravity.py` / `types.py`、`PROVIDERS` レジストリは `__init__.py`）。
+  - **凍結/非凍結の config パス**: `config.py` の `SCRIPT_DIR` は凍結時 `dirname(sys.executable)`、非凍結時 **パッケージの親**（`dirname(dirname(__file__))`）= リポジトリ/配布ルート。`config.json` は常にランチャ/exe と同階層から読む。
+  - **設定再起動**: `tray.py` は `__file__` ではなく `sys.argv[0]` を再実行する（ランチャ/`-m` 両対応）。
 - `requirements.txt` … pystray, Pillow。
 - `config.example.json` / `config.json` … 設定（config.json は .gitignore 済み）。
 - `run.bat` … 通常起動（コンソールあり）。
@@ -84,10 +89,12 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
   .venv312\Scripts\python -m pip install -r requirements-build.txt   # pip/pyinstaller を固定（再現性）
   .venv312\Scripts\python -m pip install -r requirements.txt
   .venv312\Scripts\python -m PyInstaller --onedir --noconsole --clean --noconfirm ^
-      --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ai_usage_tray.py
+      --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ^
+      --collect-submodules ai_usage_tray ai_usage_tray.py
   copy /Y config.json dist\AIUsageTray\config.json
   ```
   → 成果物: `dist\AIUsageTray\AIUsageTray.exe`（onedir。フォルダごと配布。config.json は exe と同階層）。
+  - エントリは薄いランチャ `ai_usage_tray.py` のまま。本体は `ai_usage_tray/` パッケージへ静的 import されるが、取りこぼし保険として `--collect-submodules ai_usage_tray`（`AIUsageTray.spec` では `collect_submodules('ai_usage_tray')`）を付ける。
 - 注意: `python -m PyInstaller` のままだと PATH の **3.14 を拾って再発**する。必ず 3.12 venv の python を使うこと（`build_exe.bat` は対応済み）。
 - `.venv312/` はビルド専用。`.gitignore` で除外推奨。
 - 代替の常駐手段として **`start_hidden.vbs`（pythonw）** も引き続き有効。
@@ -100,4 +107,4 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - Claude/Codex/Antigravity の各パーサはユーザー実データ・模擬データで個別検証済み（Claude 49%/23%、Codex 5h/週、Antigravity 実 JSON で 13→9 モデル、フィルタ動作）。
 - exe 化も完了（Python 3.12 ビルドで起動・常駐を確認）。主要タスクは全て完了。
 - WSL データソース切替（#51 / PR #52）を追加。Windows 既定設定と WSL Ubuntu 24.04 設定の `--probe`/`--once` で確認済み（Antigravity は `antigravity-usage 0.2.9` で取得成功。Claude/Codex は token/session 不在環境のため provider エラー表示まで確認）。
-- 本体は約 1,900 行に肥大化しており、責務ごとのモジュール分割を検討中（Issue #55）。
+- **モジュール分割（Issue #55）完了**: 単一ファイル（約 2,004 行）を `ai_usage_tray/` パッケージへ責務ごとに分割。薄いランチャ `ai_usage_tray.py` を残し配布・起動スクリプトは無改修。`compileall` / `--once` / `--probe`（ランチャ・`-m` 両経路）/ PyInstaller onedir ビルド + 凍結 exe 常駐を確認済み。

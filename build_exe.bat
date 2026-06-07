@@ -35,7 +35,7 @@ if errorlevel 1 goto PIPFAIL
 echo.
 
 echo [4/4] Building AIUsageTray (onedir, no console window)...
-"%VPY%" -m PyInstaller --onedir --noconsole --clean --noconfirm --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ai_usage_tray.py
+"%VPY%" -m PyInstaller --onedir --noconsole --clean --noconfirm --name AIUsageTray --icon app.ico --hidden-import pystray._win32 --collect-submodules ai_usage_tray ai_usage_tray.py
 if errorlevel 1 goto BUILDFAIL
 echo.
 
