@@ -104,7 +104,7 @@ WSL 上で AI ツールを使っている場合は、設定で provider ごと�
 - `codex_max_days`: Codex セッションログをさかのぼって探す日数。既定10日。
 - `enabled`: 表示するツールだけ true。
 - `icon_color_mode`: アイコンの配色モード。`"classic"`（緑→黄→赤・既定）/ `"colorblind"`（青→黄→赤）。緑と赤が見分けづらい場合は `"colorblind"` を選びます。「設定...」→「アイコン表示」からも変更できます。
-- `antigravity_show_autocomplete`: オートコンプリート専用モデルも表示するか（既定 false）。Antigravity のモデルは残量・リセット時刻が一致する**共通枠**ごとに自動でまとめて1行表示されます（例 `Gemini 3 (共通枠)` / `Claude / GPT-OSS (共通枠)`）。
+- Antigravity のモデルはファミリ単位の**共通枠**に自動でまとめて表示されます。`Gemini (共通枠)` を上段、`Claude / GPT-OSS (共通枠)` を下段に固定し、オートコンプリート専用モデルは常に除外します（表示行には現れないため、旧 `antigravity_show_autocomplete` 設定は撤去しました）。
 - `antigravity_npx_fallback`: `antigravity-usage` が未検出のとき `npx` 経由で取得するか（**既定 false = opt-in**）。⚠ 有効にすると、常駐アプリがバックグラウンドで（既定5分ごとや初回・キャッシュ切れ時に）**npm からパッケージを取得・実行**します。気になる場合は無効のまま `npm i -g antigravity-usage` で導入するか、`paths.antigravity_usage` で実行ファイルを明示してください。
 - `antigravity_usage_version`: 上記 npx フォールバック時に使う固定バージョン（既定 `"0.2.9"`）。空文字にすると無印（最新）になりますが、サプライチェーンの観点から**非推奨**です。
 - `wsl.distro`: WSL のディストリビューション名。空文字なら Windows 側 `wsl.exe` の既定ディストリビューションを使います。既定は `wsl -l -v` で `*` が付いている distro です（例: `"Ubuntu-24.04"`）。解決できる場合、メニューや診断の `WSL:` 表示には実際の distro 名が出ます。
@@ -172,7 +172,8 @@ python ai_usage_tray.py --probe
 
 ## ファイル構成
 
-- `ai_usage_tray.py` … 本体（単一ファイル）
+- `ai_usage_tray.py` … 薄いランチャ（`python ai_usage_tray.py` / `python -m ai_usage_tray` で起動）
+- `ai_usage_tray/` … 本体パッケージ（トレイ UI・各 provider・設定・WSL・診断などに分割）
 - `requirements.txt` … pystray, Pillow
 - `config.example.json` / `config.json` … 設定（config.json は .gitignore 済み）
 - `run.bat` … 通常起動（コンソールあり）
@@ -181,6 +182,58 @@ python ai_usage_tray.py --probe
 - `build_exe.bat` … PyInstaller で exe 化（Python 3.12 / onedir）
 - `app.ico` … exe 埋め込み用アイコン
 - `CLAUDE.md` … 開発・引き継ぎメモ（設計と確定仕様）
+
+### パッケージ構成（`ai_usage_tray/`）
+
+責務ごとにモジュール分割されています（矢印は import 依存。下の層ほど依存が少ない）。
+
+```mermaid
+graph TD
+    L["ai_usage_tray.py<br/>薄いランチャ"] --> M["__main__.py<br/>CLI / argparse"]
+
+    subgraph UI["エントリ・UI 層"]
+        M --> TRAY["tray.py<br/>トレイ UI・常駐ループ"]
+        M --> GUI["gui.py<br/>設定ダイアログ"]
+        M --> PROBE["probe.py<br/>診断 (--probe)"]
+    end
+
+    subgraph AGG["集約層"]
+        COLLECT["collect.py<br/>集約・summarize_text"]
+    end
+
+    subgraph PROV["provider 層"]
+        PROVIDERS["providers/<br/>claude・codex・antigravity<br/>(types, PROVIDERS)"]
+    end
+
+    subgraph BASE["基盤層"]
+        WSL["wsl.py<br/>WSL ヘルパー"]
+        CONFIG["config.py<br/>設定・凍結パス"]
+        STATE["state.py<br/>共有ロック/キャッシュ"]
+        UTILS["utils.py<br/>run_cmd・日時整形"]
+        REDACT["redact.py<br/>秘匿・マスク"]
+        CONST["constants.py<br/>定数"]
+    end
+
+    TRAY --> COLLECT
+    PROBE --> COLLECT
+    M --> COLLECT
+    COLLECT --> PROVIDERS
+    TRAY --> PROVIDERS
+    PROBE --> PROVIDERS
+    GUI --> CONFIG
+    TRAY --> CONFIG
+    PROVIDERS --> WSL
+    PROVIDERS --> CONFIG
+    PROVIDERS --> STATE
+    PROVIDERS --> UTILS
+    PROVIDERS --> REDACT
+    COLLECT --> STATE
+    WSL --> UTILS
+    WSL --> REDACT
+    REDACT --> CONST
+    TRAY --> STATE
+    TRAY --> CONST
+```
 
 ---
 

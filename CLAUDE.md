@@ -15,7 +15,12 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - 右クリックメニューに各サービスの枠ごとの残り%・リセット時刻、「今すぐ更新」「終了」。
 
 ## ファイル構成
-- `ai_usage_tray.py` … 本体（単一ファイル）。
+- `ai_usage_tray.py` … 薄いランチャ（`from ai_usage_tray.__main__ import main`）。配布・起動スクリプトのエントリ参照を維持するための入口。
+- `ai_usage_tray/` … 本体パッケージ（Issue #55 で責務ごとに分割）。
+  - `__main__.py`（CLI/argparse）, `config.py`（既定設定・load/凍結パス）, `redact.py`（秘匿・マスク）, `utils.py`（日時整形・`run_cmd`/`resolve_cmd`）, `state.py`（共有ロック/キャッシュ）, `wsl.py`（WSL ヘルパー）, `collect.py`（集約・`summarize_text`）, `tray.py`（トレイ UI）, `gui.py`（設定ダイアログ）, `probe.py`（診断）, `constants.py`。
+  - `providers/`（`codex.py` / `claude.py` / `antigravity.py` / `types.py`、`PROVIDERS` レジストリは `__init__.py`）。
+  - **凍結/非凍結の config パス**: `config.py` の `SCRIPT_DIR` は凍結時 `dirname(sys.executable)`、非凍結時 **パッケージの親**（`dirname(dirname(__file__))`）= リポジトリ/配布ルート。`config.json` は常にランチャ/exe と同階層から読む。
+  - **設定再起動**: `tray.py` は `__file__` ではなく `sys.argv[0]` を再実行する（ランチャ/`-m` 両対応）。
 - `requirements.txt` … pystray, Pillow。
 - `config.example.json` / `config.json` … 設定（config.json は .gitignore 済み）。
 - `run.bat` … 通常起動（コンソールあり）。
@@ -49,8 +54,9 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - ローカルモードは Antigravity の **IDE（エディタ）** が起動していれば自動接続。IDE を使わない場合は `antigravity-usage login`（クラウドモード）が必要。`agy` CLI 単体ではローカルサーバが立たない。
 - 実データ形式: `models` は配列。各要素 `label`, `modelId`, `remainingPercentage`(0..1 の割合。1=100%), `resetTime`(ISO), `isAutocompleteOnly`。
 - パーサ `_walk_find_models` は JSON を再帰走査して remaining/used + reset を持つオブジェクトを汎用抽出（将来の形式変更に強い）。`remainingPercentage` 等のキー名も対応済み。
-- 既定で `isAutocompleteOnly: true` のモデルは除外（`antigravity_show_autocomplete` で表示可）。
-- **共通枠の集約（Issue #20）**: Antigravity のモデルは remaining%・resetTime が枠単位で完全一致する（実データ上 Gemini 系 / Claude+GPT-OSS 系の2枠）。`(remaining_pct, reset_at)` でグループ化し、共通接頭辞があればそれを（例 `Gemini 3 (共通枠)`）、無ければ先頭ファミリ名を列挙して（例 `Claude / GPT-OSS (共通枠)`）1行に集約する。
+- `isAutocompleteOnly: true` のモデルは**常に除外**（Issue #63 で `antigravity_show_autocomplete` 設定・GUI チェックボックスを撤去。共通枠化で独立行を持たず、枠の代表値=残量最小を不必要に押し下げるのを避けるため固定除外）。古い config の残存キーは無害に無視。
+- **共通枠の集約（Issue #20 → #64 で固定2枠化）**: Antigravity の枠は実データ上 Gemini 系 / Claude+GPT-OSS 系の2枠。モデル名のファミリ（`ANTIGRAVITY_POOLS` のキーワード `gemini` / `claude`,`gpt`）で常にこの2枠へ分けて集約する（`_antigravity_pool_of`）。**両枠の remaining%・resetTime がたまたま一致しても1行に潰さない**。表示順は `ANTIGRAVITY_POOLS` の定義順に固定（`Gemini (共通枠)` を上段、`Claude / GPT-OSS (共通枠)` を下段）し、Antigravity だけは残量昇順ソートを行わない。各枠の代表値は枠内で残量最小（最も余裕のない）モデル。既知ファミリに該当しないモデルは末尾に残量昇順で個別表示。
+  - 旧実装は `(remaining_pct, reset_at)` 一致でグループ化＋共通接頭辞ラベル付けだったが、値が揃うと全モデルが1行（例 `Claude / Gemini / GPT-OSS (共通枠)`）に潰れて枠の区別が消える問題があったため、ファミリ固定方式へ変更した。
 - 旧 `antigravity_models`（モデル部分一致フィルタ）は共通枠化により無意味なため **撤去済み**（設定 GUI・DEFAULT_CONFIG から削除。古い config の残存キーは無害に無視）。
 - 出典: https://github.com/skainguyen1412/antigravity-usage
 
@@ -84,10 +90,12 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
   .venv312\Scripts\python -m pip install -r requirements-build.txt   # pip/pyinstaller を固定（再現性）
   .venv312\Scripts\python -m pip install -r requirements.txt
   .venv312\Scripts\python -m PyInstaller --onedir --noconsole --clean --noconfirm ^
-      --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ai_usage_tray.py
+      --name AIUsageTray --icon app.ico --hidden-import pystray._win32 ^
+      --collect-submodules ai_usage_tray ai_usage_tray.py
   copy /Y config.json dist\AIUsageTray\config.json
   ```
   → 成果物: `dist\AIUsageTray\AIUsageTray.exe`（onedir。フォルダごと配布。config.json は exe と同階層）。
+  - エントリは薄いランチャ `ai_usage_tray.py` のまま。本体は `ai_usage_tray/` パッケージへ静的 import されるが、取りこぼし保険として `--collect-submodules ai_usage_tray`（`AIUsageTray.spec` では `collect_submodules('ai_usage_tray')`）を付ける。
 - 注意: `python -m PyInstaller` のままだと PATH の **3.14 を拾って再発**する。必ず 3.12 venv の python を使うこと（`build_exe.bat` は対応済み）。
 - `.venv312/` はビルド専用。`.gitignore` で除外推奨。
 - 代替の常駐手段として **`start_hidden.vbs`（pythonw）** も引き続き有効。
@@ -100,4 +108,4 @@ Claude Code / Codex / Antigravity の残り使用量を Windows のタスクト�
 - Claude/Codex/Antigravity の各パーサはユーザー実データ・模擬データで個別検証済み（Claude 49%/23%、Codex 5h/週、Antigravity 実 JSON で 13→9 モデル、フィルタ動作）。
 - exe 化も完了（Python 3.12 ビルドで起動・常駐を確認）。主要タスクは全て完了。
 - WSL データソース切替（#51 / PR #52）を追加。Windows 既定設定と WSL Ubuntu 24.04 設定の `--probe`/`--once` で確認済み（Antigravity は `antigravity-usage 0.2.9` で取得成功。Claude/Codex は token/session 不在環境のため provider エラー表示まで確認）。
-- 本体は約 1,900 行に肥大化しており、責務ごとのモジュール分割を検討中（Issue #55）。
+- **モジュール分割（Issue #55）完了**: 単一ファイル（約 2,004 行）を `ai_usage_tray/` パッケージへ責務ごとに分割。薄いランチャ `ai_usage_tray.py` を残し配布・起動スクリプトは無改修。`compileall` / `--once` / `--probe`（ランチャ・`-m` 両経路）/ PyInstaller onedir ビルド + 凍結 exe 常駐を確認済み。

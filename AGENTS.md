@@ -18,7 +18,7 @@
 - やり取り、PR 本文、レビューコメント、開発メモは基本的に日本語で書く。
 - コマンドで文字コードを指定できる場合は、基本的に UTF-8 を指定する。
 - Windows / PowerShell 前提で考える。macOS / Linux 対応は明示依頼がある場合だけ扱う。
-- 変更は要求された範囲に絞り、単一ファイル構成の軽さをできるだけ保つ。
+- 変更は要求された範囲に絞り、`ai_usage_tray/` パッケージの責務分割（Issue #55）に沿って、該当モジュールへ最小限に加える。
 - 既存の設定キー、README、`config.example.json`、ビルド手順の整合性を崩さない。
 - `.bat` は ASCII を基本にする。日本語表示が必要な場合は Python や Markdown 側へ寄せる。
 
@@ -42,7 +42,8 @@ AI Usage Tray は、Claude Code / Codex / Antigravity の残り使用量を Wind
 
 主な構成:
 
-- `ai_usage_tray.py`: 本体。トレイ UI、各 provider、設定読み込み、診断出力を含む。
+- `ai_usage_tray.py`: 薄いランチャ。実体は `ai_usage_tray/` パッケージへ委譲（`python -m ai_usage_tray` でも起動可）。
+- `ai_usage_tray/`: 本体パッケージ。トレイ UI（`tray.py`）、各 provider（`providers/`）、設定読み込み（`config.py`）、WSL ヘルパー（`wsl.py`）、診断（`probe.py`）、設定 GUI（`gui.py`）等に分割。
 - `config.example.json`: 公開用の設定サンプル。
 - `config.json`: ローカル設定。コミットしない。
 - `requirements.txt`: 実行依存。

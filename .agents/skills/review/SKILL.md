@@ -34,7 +34,7 @@ Pull Request、コミット差分、または作業中のローカル差分を�
 
 1. 差分の目的を確認する。
 2. 変更ファイルを分類する。
-   - 本体: `ai_usage_tray.py`
+   - ランチャ: `ai_usage_tray.py` / 本体パッケージ: `ai_usage_tray/`（`providers/`, `tray.py`, `wsl.py`, `config.py` など）
    - 設定: `config.example.json`, `.gitignore`
    - 実行補助: `*.bat`, `*.vbs`
    - ドキュメント: `README.md`, `CLAUDE.md`, `AGENTS.md`, `.agents/**`
