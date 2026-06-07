@@ -57,6 +57,27 @@ def _wsl_default_distro_name():
     return ""
 
 
+def _wsl_installed_distro_names():
+    rc, lines, err = _wsl_list_output_lines(["-l", "-v"], timeout=3)
+    if rc != 0:
+        return []
+
+    names = []
+    seen = set()
+    for line in lines:
+        text = line[1:].strip() if line.startswith("*") else line.strip()
+        parts = text.split()
+        if not parts or parts[0].upper() == "NAME":
+            continue
+        name = parts[0]
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
 def _wsl_label(cfg):
     distro = _wsl_distro(cfg)
     if distro:

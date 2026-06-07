@@ -5,6 +5,7 @@ import sys
 import json
 
 from .config import CONFIG_PATH
+from .wsl import _wsl_installed_distro_names
 
 
 def run_settings_gui(cfg):
@@ -17,7 +18,7 @@ def run_settings_gui(cfg):
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
-    root.geometry("460x620")
+    root.geometry("460x530")
     root.resizable(False, False)
 
     default_font = ("Yu Gothic UI", 10)
@@ -62,21 +63,15 @@ def run_settings_gui(cfg):
     distro_row = ttk.Frame(wsl_lf)
     distro_row.pack(fill=tk.X, pady=(0, 5))
     ttk.Label(distro_row, text="Distro:").pack(side=tk.LEFT)
-    ttk.Entry(distro_row, textvariable=var_wsl_distro, width=24).pack(side=tk.LEFT, padx=5)
+    ttk.Combobox(distro_row, textvariable=var_wsl_distro,
+                 values=_wsl_installed_distro_names(), width=24).pack(side=tk.LEFT, padx=5)
     ttk.Label(distro_row, text="(空欄=既定)").pack(side=tk.LEFT)
     ttk.Checkbutton(wsl_lf, text="Claude Code を WSL 側から取得", variable=var_wsl_claude).pack(anchor=tk.W, pady=1)
     ttk.Checkbutton(wsl_lf, text="Codex を WSL 側から取得", variable=var_wsl_codex).pack(anchor=tk.W, pady=1)
     ttk.Checkbutton(wsl_lf, text="Antigravity を WSL 側から取得", variable=var_wsl_antigravity).pack(anchor=tk.W, pady=1)
     ttk.Label(wsl_lf, text="※ WSL 側の認証情報・セッションログ・CLI を参照します。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
 
-    # 4. Antigravity の設定
-    anti_lf = ttk.LabelFrame(main_frame, text="Antigravity 設定", padding="10")
-    anti_lf.pack(fill=tk.X, pady=(0, 10))
-
-    ttk.Label(anti_lf, text="※ モデルは Gemini 枠 / Claude・GPT-OSS 枠の共通枠ごとに自動でまとめて表示されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
-    ttk.Label(anti_lf, text="※ オートコンプリート専用モデルは常に除外されます。", font=("Yu Gothic UI", 9), foreground="gray").pack(anchor=tk.W)
-
-    # 5. アイコン表示(配色モード)
+    # 4. アイコン表示(配色モード)
     icon_lf = ttk.LabelFrame(main_frame, text="アイコン表示", padding="10")
     icon_lf.pack(fill=tk.X, pady=(0, 10))
 
