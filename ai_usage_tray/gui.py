@@ -1,11 +1,27 @@
 # -*- coding: utf-8 -*-
 """設定ダイアログ(tkinter)。別プロセスで起動され、保存時に config.json を書く。"""
 
+import os
 import sys
 import json
 
 from .config import CONFIG_PATH
 from .wsl import _wsl_installed_distro_names
+
+
+def _enable_dpi_awareness():
+    """高DPI環境で tkinter のレイアウトが崩れないよう、プロセスを DPI Aware にする。
+    Tk() 生成より前に呼ぶ必要がある。失敗しても無視(従来動作にフォールバック)。"""
+    if os.name != "nt":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 
 def run_settings_gui(cfg):
@@ -16,9 +32,12 @@ def run_settings_gui(cfg):
         print("tkinter が利用できません。Python の標準インストールを確認してください。", file=sys.stderr)
         sys.exit(1)
 
+    _enable_dpi_awareness()
+
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
-    root.geometry("460x530")
+    # サイズはウィジェット構築後にコンテンツの必要量から決める(下部のジオメトリ設定参照)。
+    # 高DPIでフォントが拡大しても保存/キャンセルボタンが画面外に押し出されないようにする。
     root.resizable(False, False)
 
     default_font = ("Yu Gothic UI", 10)
@@ -135,11 +154,14 @@ def run_settings_gui(cfg):
     ttk.Button(btn_frame, text="保存", command=on_save).pack(side=tk.RIGHT, padx=5)
     ttk.Button(btn_frame, text="キャンセル", command=on_cancel).pack(side=tk.RIGHT)
 
+    # コンテンツの必要サイズ(reqwidth/reqheight)からウィンドウサイズを決めて中央寄せする。
+    # 固定サイズを使わないことで、高DPI/フォント拡大時もボタンが収まる。
     root.update_idletasks()
-    w = root.winfo_width()
-    h = root.winfo_height()
+    w = root.winfo_reqwidth()
+    h = root.winfo_reqheight()
+    root.minsize(w, h)
     x = (root.winfo_screenwidth() // 2) - (w // 2)
     y = (root.winfo_screenheight() // 2) - (h // 2)
-    root.geometry(f"+{x}+{y}")
+    root.geometry(f"{w}x{h}+{x}+{y}")
 
     root.mainloop()
