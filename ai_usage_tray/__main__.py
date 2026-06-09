@@ -6,7 +6,7 @@
 import sys
 import argparse
 
-from .config import load_config
+from .config import load_config, config_exists
 from .collect import collect, summarize_text
 from .gui import run_settings_gui
 from .probe import run_probe
@@ -33,14 +33,21 @@ def main():
     cfg = load_config()
 
     if args.settings:
-        run_settings_gui(cfg)
-        return
+        # 保存=0 / 取消=1 を exit code に変換(tray.py のサブプロセス経路が rc==0 で判定)。
+        sys.exit(0 if run_settings_gui(cfg) else 1)
     if args.probe or args.probe_raw:
         run_probe(cfg, show_raw=args.probe_raw)
         return
     if args.once:
         print(summarize_text(collect(cfg)))
         return
+
+    # 初回起動(config.json 不在)は、トレイ常駐の前に設定ダイアログで初期セットアップを促す。
+    # 保存されたら書き出された config.json を読み直してから常駐する。
+    # 取消時は config.json を書かず既定設定のまま常駐し、次回起動で再度プロンプトする。
+    if not config_exists():
+        if run_settings_gui(cfg):
+            cfg = load_config()
     run_tray(cfg)
 
 

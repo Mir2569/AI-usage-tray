@@ -58,6 +58,12 @@ def _deep_merge_and_validate(default_cfg, user_cfg, path=""):
             default_cfg[k] = v
 
 
+def config_exists():
+    """config.json が存在するかを返す。初回起動判定に使う。
+    load_config() は FileNotFoundError を握り潰すため、有無判定用に独立させる。"""
+    return os.path.exists(CONFIG_PATH)
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
     try:
