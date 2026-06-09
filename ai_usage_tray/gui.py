@@ -1,11 +1,25 @@
 # -*- coding: utf-8 -*-
 """設定ダイアログ(tkinter)。別プロセスで起動され、保存時に config.json を書く。"""
 
+import os
 import sys
 import json
 
-from .config import CONFIG_PATH
+from .config import CONFIG_PATH, SCRIPT_DIR
 from .wsl import _wsl_installed_distro_names
+
+
+def _settings_icon_path():
+    """設定ウィンドウのアイコン(app.ico)を探して返す。見つからなければ None。
+    凍結時は PyInstaller の一時展開先(_MEIPASS)も候補にする。"""
+    candidates = [os.path.join(SCRIPT_DIR, "app.ico")]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "app.ico"))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def run_settings_gui(cfg):
@@ -18,6 +32,13 @@ def run_settings_gui(cfg):
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
+    # タイトルバー/タスクバーのアイコンを app.ico に設定する(見つからなければ既定のまま)。
+    _ico = _settings_icon_path()
+    if _ico:
+        try:
+            root.iconbitmap(_ico)
+        except Exception:
+            pass
     root.geometry("460x530")
     root.resizable(False, False)
 

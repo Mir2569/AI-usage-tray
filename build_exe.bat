@@ -42,6 +42,9 @@ echo.
 echo   Copying config.json next to the exe (if present)...
 if exist config.json copy /Y config.json dist\AIUsageTray\config.json >nul
 
+echo   Copying app.ico next to the exe (settings window icon)...
+if exist app.ico copy /Y app.ico dist\AIUsageTray\app.ico >nul
+
 echo.
 echo ============================================================
 echo  Done!  -^>  dist\AIUsageTray\AIUsageTray.exe
