@@ -3,6 +3,7 @@
 
 import sys
 import json
+import threading
 
 from .config import CONFIG_PATH
 from .wsl import _wsl_installed_distro_names
@@ -63,9 +64,29 @@ def run_settings_gui(cfg):
     distro_row = ttk.Frame(wsl_lf)
     distro_row.pack(fill=tk.X, pady=(0, 5))
     ttk.Label(distro_row, text="Distro:").pack(side=tk.LEFT)
-    ttk.Combobox(distro_row, textvariable=var_wsl_distro,
-                 values=_wsl_installed_distro_names(), width=24).pack(side=tk.LEFT, padx=5)
+    # 候補(values)は WSL コマンドが遅い/応答しない環境だと取得に時間がかかるため、
+    # ここでは空のまま即座に表示し、別スレッドで取得してから後追いで反映する
+    # (同期取得すると設定画面が開くまで GUI 全体がハングするため)。
+    # 編集可能なので、候補ロード前でもユーザーは distro 名を手入力できる。
+    distro_combo = ttk.Combobox(distro_row, textvariable=var_wsl_distro, values=[], width=24)
+    distro_combo.pack(side=tk.LEFT, padx=5)
     ttk.Label(distro_row, text="(空欄=既定)").pack(side=tk.LEFT)
+
+    def _load_distro_names():
+        names = _wsl_installed_distro_names()
+
+        def _apply():
+            try:
+                distro_combo.configure(values=names)
+            except tk.TclError:
+                pass  # ウィンドウが既に閉じられている
+
+        try:
+            root.after(0, _apply)
+        except tk.TclError:
+            pass
+
+    threading.Thread(target=_load_distro_names, daemon=True).start()
     ttk.Checkbutton(wsl_lf, text="Claude Code を WSL 側から取得", variable=var_wsl_claude).pack(anchor=tk.W, pady=1)
     ttk.Checkbutton(wsl_lf, text="Codex を WSL 側から取得", variable=var_wsl_codex).pack(anchor=tk.W, pady=1)
     ttk.Checkbutton(wsl_lf, text="Antigravity を WSL 側から取得", variable=var_wsl_antigravity).pack(anchor=tk.W, pady=1)
