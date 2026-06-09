@@ -96,34 +96,37 @@ def fmt_age(dt):
     return f"{days}日前 ({clock})"
 
 
-def _decode_best(data):
-    """bytes を UTF-8 優先、ダメなら CP932 でデコードする。
-
-    Windows ネイティブのコマンド(npm/npx など)はシステムロケール(日本語環境では
-    CP932)でエラーメッセージを出すことがある。UTF-8 固定の errors="replace" だと
-    日本語が `�` だらけになり原因が読めなくなるため、UTF-8 で失敗したら CP932 で
-    再試行する。どちらの厳密デコードも失敗した場合のみ UTF-8(置換)で確実に文字列化する。
-    JSON 出力(Codex/Antigravity/WSL)は妥当な UTF-8 なので UTF-8 で成功し、CP932 へは
-    落ちない。"""
-    if not data:
-        return ""
-    if isinstance(data, str):
-        return data
-    for enc in ("utf-8", "cp932"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
-
-
 def run_cmd(cmd, timeout=30):
     """コマンドを実行し (returncode, stdout, stderr)。Windows の .cmd shim も考慮。
-    timeout=None を渡すと無期限に待つ(終了が不定なサブプロセス用)。
-    出力は UTF-8 優先・CP932 フォールバックでデコードする(日本語 Windows のネイティブ
-    エラーが文字化けしないように)。"""
-    rc, out, err = run_cmd_bytes(cmd, timeout=timeout)
-    return rc, _decode_best(out), _decode_best(err)
+    timeout=None を渡すと無期限に待つ(終了が不定なサブプロセス用)。"""
+    # noconsole(pythonw / exe)で動かすと、子プロセス起動のたびに黒いコンソール窓が
+    # 一瞬出る。CREATE_NO_WINDOW でそれを抑止する(Windows のみ)。
+    kwargs = {}
+    shell = False
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        # コマンドの拡張子が .bat や .cmd の場合は shell=True が必要
+        target = cmd[0] if isinstance(cmd, list) else cmd
+        if str(target).lower().endswith((".bat", ".cmd")):
+            shell = True
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            shell=shell,
+            **kwargs,
+        )
+        return proc.returncode, proc.stdout or "", proc.stderr or ""
+    except FileNotFoundError as e:
+        return 127, "", str(e)
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except Exception as e:
+        return 1, "", str(e)
 
 
 def run_cmd_bytes(cmd, timeout=30):
