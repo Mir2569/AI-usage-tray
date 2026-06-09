@@ -7,8 +7,21 @@ import json
 import queue
 import threading
 
-from .config import CONFIG_PATH
+from .config import CONFIG_PATH, SCRIPT_DIR
 from .wsl import _wsl_installed_distro_names
+
+
+def _settings_icon_path():
+    """設定ウィンドウのアイコン(app.ico)を探して返す。見つからなければ None。
+    凍結時は PyInstaller の一時展開先(_MEIPASS)も候補にする。"""
+    candidates = [os.path.join(SCRIPT_DIR, "app.ico")]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "app.ico"))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def _enable_dpi_awareness():
@@ -45,6 +58,13 @@ def run_settings_gui(cfg):
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
+    # タイトルバー/タスクバーのアイコンを app.ico に設定する(見つからなければ既定のまま)。
+    _ico = _settings_icon_path()
+    if _ico:
+        try:
+            root.iconbitmap(_ico)
+        except Exception:
+            pass
     # サイズはウィジェット構築後にコンテンツの必要量から決める(下部のジオメトリ設定参照)。
     # 高DPIでフォントが拡大しても保存/キャンセルボタンが画面外に押し出されないようにする。
     root.resizable(False, False)
