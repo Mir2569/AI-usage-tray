@@ -103,6 +103,8 @@ python ai_usage_tray.py --probe-raw # 上記に加えて外部CLIの生出力も
 
 `config.example.json` を **`config.json`** という名前でコピーして編集すると挙動を変えられます（exe 版は exe と同じフォルダの config.json を読みます）。
 
+> **初回起動時**は `config.json` が無いと、トレイ常駐の前に設定ダイアログが自動で開きます。プロバイダの有効化・更新間隔・WSL データソース・配色モードを選んで「保存」すると、その内容で `config.json` が作成されて常駐が始まります。「キャンセル」や × で閉じると既定設定のまま常駐し、次回起動でまた設定ダイアログが開きます。`--once` / `--probe` / `--settings` などの実行では自動表示しません。
+
 - `refresh_seconds`: 自動更新間隔（秒）。既定5分。
 - `codex_max_days`: Codex セッションログをさかのぼって探す日数。既定10日。
 - `enabled`: 表示するツールだけ true。

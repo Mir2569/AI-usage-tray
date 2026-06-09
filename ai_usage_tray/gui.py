@@ -9,12 +9,19 @@ from .wsl import _wsl_installed_distro_names
 
 
 def run_settings_gui(cfg):
+    """設定ダイアログを表示する。保存されたら True、キャンセル/×で閉じたら False を返す。
+
+    呼び出し側(__main__ の --settings 分岐)はこの戻り値を exit code(0/保存・1/取消)へ
+    変換するため、tray.py のサブプロセス経路は従来どおり rc==0 で保存を判定できる。
+    初回起動フロー(__main__)では同一プロセス内で呼び、戻り値で再読込要否を判断する。"""
     try:
         import tkinter as tk
         from tkinter import messagebox, ttk
     except ImportError:
         print("tkinter が利用できません。Python の標準インストールを確認してください。", file=sys.stderr)
-        sys.exit(1)
+        return False
+
+    result = {"saved": False}
 
     root = tk.Tk()
     root.title("AI Usage Tray 設定")
@@ -123,17 +130,18 @@ def run_settings_gui(cfg):
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=4, ensure_ascii=False)
+            result["saved"] = True
             root.destroy()
-            sys.exit(0)
         except Exception as e:
             messagebox.showerror("エラー", f"設定の保存に失敗しました:\n{e}")
 
     def on_cancel():
         root.destroy()
-        sys.exit(1)
 
     ttk.Button(btn_frame, text="保存", command=on_save).pack(side=tk.RIGHT, padx=5)
     ttk.Button(btn_frame, text="キャンセル", command=on_cancel).pack(side=tk.RIGHT)
+    # ウィンドウの × で閉じた場合もキャンセル扱い(保存しない)にする。
+    root.protocol("WM_DELETE_WINDOW", on_cancel)
 
     root.update_idletasks()
     w = root.winfo_width()
@@ -143,3 +151,4 @@ def run_settings_gui(cfg):
     root.geometry(f"+{x}+{y}")
 
     root.mainloop()
+    return result["saved"]
