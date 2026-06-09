@@ -143,3 +143,77 @@ git pull origin main
 ```
 
 未コミット変更がある場合は、切り替えずに内容を報告して指示を待ちます。
+
+## リリース作成
+
+Releases へバイナリ配布を追加するときの手順です。既存リリース（v1.0.0 / v1.1.0 / v1.2.0）の形式に合わせます。
+
+### バージョン番号
+
+- タグは `vX.Y.Z`（SemVer）。`main` の最新コミットを対象にします。
+- MAJOR: 互換性を壊す変更 / MINOR: 後方互換の新機能 / PATCH: 後方互換の不具合修正。
+- 直前リリースからの変更を確認します。
+
+```powershell
+git tag --sort=-v:refname
+git log v<直前>..main --oneline --merges
+```
+
+### exe ビルド
+
+`build_exe.bat` と同じく **Python 3.12 専用 venv** でビルドします（**3.14 は不可**。起動しない exe ができる）。`.bat` は末尾に `pause` があり非対話実行ではハングするため、エージェントが回す場合は手順を直接実行します。
+
+```powershell
+py -3.12 -m venv .venv312
+.\.venv312\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv312\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv312\Scripts\python.exe -m PyInstaller --onedir --noconsole --clean --noconfirm `
+  --name AIUsageTray --icon app.ico --hidden-import pystray._win32 `
+  --collect-submodules ai_usage_tray ai_usage_tray.py
+Copy-Item -Force app.ico dist\AIUsageTray\app.ico   # 設定ウィンドウのアイコン用
+```
+
+- `dist\AIUsageTray\` が成果物（onedir）。`AIUsageTray.exe` を起動して常駐することを確認してから配布します。
+- **個人の `config.json` は同梱しない**（WSL distro 名などローカル設定が漏れる）。`build_exe.bat` はローカル用に config.json をコピーするが、リリース zip には含めないこと。`app.ico` は exe 同階層へ同梱する。
+- `*.spec`・`build/`・`dist/`・`.venv312/` は追跡しない（gitignore 済み）。
+
+### zip 化と公開
+
+成果物を `AIUsageTray-vX.Y.Z-windows-x64.zip` にまとめ、`gh release create` で添付します。
+
+```powershell
+Compress-Archive -Path "dist\AIUsageTray\*" -DestinationPath "AIUsageTray-vX.Y.Z-windows-x64.zip" -CompressionLevel Optimal
+# zip に config.json が混ざっていないか確認してから公開する
+gh release create vX.Y.Z --target main --title "vX.Y.Z — 要約" `
+  --notes-file scratch\release_notes.md "AIUsageTray-vX.Y.Z-windows-x64.zip"
+```
+
+### リリースノートの書式
+
+絵文字は使わず、既存リリースと同じ構成にします（本文は `scratch/` に置いて `--notes-file` で渡す）。
+
+```markdown
+## AI Usage Tray vX.Y.Z
+
+<!-- 1-2文の概要 -->
+
+### 主な変更
+
+- <!-- ユーザー視点の変更を平易な箇条書きで。外部貢献は「（@user さんによる貢献）」を付ける -->
+
+### インストール方法
+
+1. 下の `AIUsageTray-vX.Y.Z-windows-x64.zip` をダウンロード
+2. 任意のフォルダに展開
+3. `AIUsageTray.exe` をダブルクリックで起動
+
+### 動作要件
+
+<!-- v1.1.0 / v1.2.0 と同じ Windows 10/11・各サービスの認証情報の節 -->
+
+### 設定
+
+<!-- 初回起動ダイアログ・トレイの「設定...」・config.json の案内 -->
+```
+
+末尾に `**Full Changelog**: https://github.com/Mir2569/ai-usage-tray/compare/v<直前>...vX.Y.Z` を付けます。

@@ -14,6 +14,9 @@ build/
 dist/
 *.spec
 
+# ---- Release artifacts (built locally, attached to GitHub Releases) ----
+AIUsageTray-*.zip
+
 # ---- App config (user-specific; commit config.example.json instead) ----
 config.json
 
