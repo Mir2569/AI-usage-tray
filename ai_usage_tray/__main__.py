@@ -43,11 +43,13 @@ def main():
         return
 
     # 初回起動(config.json 不在)は、トレイ常駐の前に設定ダイアログで初期セットアップを促す。
-    # 保存されたら書き出された config.json を読み直してから常駐する。
-    # 取消時は config.json を書かず既定設定のまま常駐し、次回起動で再度プロンプトする。
+    # run_settings_gui は cfg を直接書き換える(保存前に更新する)ため、保存有無に
+    # かかわらずディスクから読み直してから常駐する。保存済みならその値、未保存
+    # (キャンセル/× や保存失敗)なら config.json が無いまま既定設定が返るので、
+    # 「取消時は既定設定のまま常駐し、次回起動で再度プロンプト」の仕様を満たす。
     if not config_exists():
-        if run_settings_gui(cfg):
-            cfg = load_config()
+        run_settings_gui(cfg)
+        cfg = load_config()
     run_tray(cfg)
 
 
