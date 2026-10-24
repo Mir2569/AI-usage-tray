@@ -3,7 +3,7 @@
 # App runtime deps live in requirements.txt.
 # Requires Python 3.10+ (pip 26.x has Requires-Python >=3.10); build_exe.bat
 # enforces this so a stale fallback interpreter fails fast with a clear message.
-pip==26.1.2
+pip==26.2
 pyinstaller==6.21.0
 # Transitive dep of pyinstaller, pinned to avoid build-time drift.
 pyinstaller-hooks-contrib==2026.6
